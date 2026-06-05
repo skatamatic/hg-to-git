@@ -1,0 +1,241 @@
+@import "tailwindcss";
+
+/* Dark theme (default) — VS Code / Cursor–style slate workbench */
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Typography: 3 sizes, 3 weights (normal / medium / semibold) */
+  --text-ui-sm: 0.6875rem; /* 11px */
+  --text-ui-base: 0.8125rem; /* 13px */
+  --text-ui-lg: 0.9375rem; /* 15px */
+
+  --color-background: #1e1e24;
+  --color-foreground: #e8e8ed;
+  --color-muted: #2f2f3a;
+  --color-muted-foreground: #9ca3af;
+  --color-border: #434350;
+  --color-border-subtle: #363642;
+  --color-card: #2a2a34;
+  --color-card-foreground: #e8e8ed;
+  --color-panel: #25252e;
+  --color-elevated: #32323d;
+  --color-inset: #1a1a22;
+  --color-primary: #e4e4e7;
+  --color-primary-foreground: #1e1e24;
+  --color-accent: #22d3ee;
+  --color-accent-foreground: #083344;
+  --color-hg: #2dd4bf;
+  --color-hg-muted: #1a3d38;
+  --color-git: #e879f9;
+  --color-git-muted: #3d2848;
+  --color-destructive: #f87171;
+  --color-warning: #fbbf24;
+  --color-success: #34d399;
+  --color-ring: #22d3ee;
+  --color-scrollbar: #52525f;
+  --color-scrollbar-hover: #6b6b7a;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.125rem;
+}
+
+html.light {
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-border: #e2e8f0;
+  --color-border-subtle: #f1f5f9;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-panel: #ffffff;
+  --color-elevated: #f8fafc;
+  --color-inset: #f1f5f9;
+  --color-primary: #0f172a;
+  --color-primary-foreground: #f8fafc;
+  --color-accent: #0891b2;
+  --color-accent-foreground: #ecfeff;
+  --color-hg: #0d9488;
+  --color-hg-muted: #ccfbf1;
+  --color-git: #c026d3;
+  --color-git-muted: #fae8ff;
+  --color-destructive: #dc2626;
+  --color-warning: #ca8a04;
+  --color-success: #059669;
+  --color-ring: #0891b2;
+  --color-scrollbar: #cbd5e1;
+  --color-scrollbar-hover: #94a3b8;
+}
+
+@layer base {
+  :root {
+    --activity-bar-width: 48px;
+    --toolbar-height: 36px;
+    --menubar-height: 32px;
+    --layout-gap: 0.75rem;
+    --sidebar-width: 272px;
+    --branch-delta-min: 260px;
+    --branch-delta-default: 448px;
+    --z-blocking-overlay: 100;
+    --z-menubar: 110;
+    --z-menubar-dropdown: 120;
+    --z-app-dialog: 130;
+  }
+
+  html.electron-win .workbench-menubar {
+    -webkit-app-region: no-drag;
+  }
+
+  html.electron-win .workbench-menubar button {
+    -webkit-app-region: no-drag;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply antialiased scroll-smooth;
+  }
+
+  body {
+    @apply h-screen overflow-hidden bg-background text-foreground font-sans text-[length:var(--text-ui-base)] font-normal leading-normal;
+    background-color: var(--color-background);
+  }
+
+  /* Subtle top-down depth; main content reads lighter than chrome */
+  html.dark body {
+    background-color: var(--color-background);
+    background-image:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--color-panel) 88%, transparent) 0%,
+        var(--color-background) 140px
+      ),
+      radial-gradient(
+        900px circle at 100% 0%,
+        color-mix(in srgb, var(--color-accent) 6%, transparent),
+        transparent 55%
+      ),
+      radial-gradient(
+        700px circle at 0% 100%,
+        color-mix(in srgb, var(--color-hg) 5%, transparent),
+        transparent 50%
+      );
+  }
+
+  html.light body {
+    background-image:
+      radial-gradient(1200px circle at 0% -10%, rgba(13, 148, 136, 0.06), transparent 45%),
+      radial-gradient(900px circle at 100% 0%, rgba(8, 145, 178, 0.04), transparent 40%);
+  }
+
+  ::selection {
+    @apply bg-accent/30 text-foreground;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-scrollbar) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--color-scrollbar);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-scrollbar-hover);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  /* Chrome: activity bar, menu, toolbar */
+  .workbench-chrome {
+    @apply border-border/80 bg-panel;
+  }
+
+  .workbench-menubar {
+    position: relative;
+    z-index: var(--z-menubar);
+  }
+
+  .workbench-menubar-dropdown {
+    z-index: var(--z-menubar-dropdown);
+  }
+
+  /* Primary content well (slightly recessed from chrome) */
+  .workbench-main {
+    @apply bg-background;
+  }
+
+  .surface-panel {
+    @apply rounded-lg border border-border bg-card text-card-foreground;
+  }
+
+  html.dark .surface-panel {
+    box-shadow:
+      0 1px 0 0 color-mix(in srgb, white 7%, transparent) inset,
+      0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+
+  html.light .surface-panel {
+    @apply shadow-sm;
+  }
+
+  .surface-elevated {
+    @apply rounded-md border border-border/80 bg-elevated;
+  }
+
+  html.dark .surface-elevated {
+    box-shadow: 0 1px 0 0 color-mix(in srgb, white 5%, transparent) inset;
+  }
+
+  .surface-inset {
+    @apply rounded-md border border-border/60 bg-inset;
+  }
+
+  .text-ui-caption {
+    @apply text-[length:var(--text-ui-sm)] leading-snug text-muted-foreground;
+  }
+
+  .text-ui-label {
+    @apply text-[length:var(--text-ui-sm)] font-medium leading-snug text-muted-foreground;
+  }
+
+  .text-ui-title {
+    @apply text-[length:var(--text-ui-base)] font-semibold leading-snug text-foreground;
+  }
+
+  .text-ui-heading {
+    @apply text-[length:var(--text-ui-lg)] font-semibold leading-snug tracking-tight text-foreground;
+  }
+
+  .text-ui-mono {
+    @apply font-mono text-[length:var(--text-ui-sm)] leading-snug;
+  }
+
+  .scrollbar-themed {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-scrollbar) transparent;
+  }
+}

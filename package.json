@@ -1,0 +1,73 @@
+{
+  "name": "hg-to-git",
+  "version": "1.0.0",
+  "description": "Convert Mercurial repositories to Git with incremental sync support",
+  "type": "module",
+  "main": "dist/electron/main.js",
+  "bin": {
+    "hg-to-git": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').copyFileSync('src/hgFastExportLauncher.py','dist/hgFastExportLauncher.py')\"",
+    "build:web": "npm install --prefix web && npm run build --prefix web",
+    "build:web:electron": "cross-env VITE_RELATIVE_BASE=1 npm run build --prefix web",
+    "build:all": "npm run build && npm run build:web",
+    "build:app": "npm run build && npm run build:web:electron",
+    "install:web": "npm install --prefix web",
+    "start": "node dist/cli.js",
+    "convert": "node dist/cli.js convert",
+    "ui": "node dist/server/index.js",
+    "dev:ui": "npm run build && concurrently -k -n tsc,api,web -c blue,magenta,green \"tsc -w\" \"node --watch dist/server/index.js\" \"wait-on file:.dev-api-port && npm run dev --prefix web\"",
+    "electron:dev": "npm run build && concurrently -k -n tsc,api,web,electron \"tsc -w\" \"node --watch dist/server/index.js\" \"wait-on file:.dev-api-port && npm run dev --prefix web\" \"wait-on tcp:127.0.0.1:5173 && cross-env NODE_ENV=development electron .\"",
+    "electron:run": "npm run build:app && cross-env HG_TO_GIT_USE_BUILT_UI=1 electron .",
+    "electron:pack": "npm run build:app && electron-builder --win",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:hg:init": "node scripts/test-hg-init.mjs",
+    "test:hg:evolve": "node scripts/test-hg-evolve.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^13.1.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.10",
+    "@vitest/coverage-v8": "^3.2.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.0.1",
+    "electron-builder": "^25.1.8",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.4",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "dev.hgtogit.app",
+    "productName": "hg-to-git",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "web/dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

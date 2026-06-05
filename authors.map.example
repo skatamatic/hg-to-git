@@ -1,0 +1,5 @@
+# hg-fast-export author map (UTF-8)
+# Format: "hg author string"="git author string"
+# Escape sequences follow Python unicode_escape.
+#
+# "User <garbage\t<user@example.com>"="User <user@example.com>"

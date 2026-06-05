@@ -1,0 +1,14 @@
+{
+  "hgRepo": "D:/repos/myproject-hg",
+  "gitRepo": "D:/repos/myproject-git",
+  "defaultBranch": "master",
+  "sanitizeNames": false,
+  "hgTags": true,
+  "repackAfterImport": true,
+  "authorsMap": "authors.map",
+  "branchesMap": null,
+  "tagsMap": null,
+  "encoding": null,
+  "fileEncoding": null,
+  "checkoutWorkingTree": true
+}
