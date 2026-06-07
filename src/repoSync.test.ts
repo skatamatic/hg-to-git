@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { analyzeRepoSync } from "./repoSync.js";
-import { buildHgToGitBranchMap } from "./branchMapping.js";
+import {
+  buildHgToGitBranchMap,
+  mergeBranchesMap,
+} from "./branchMapping.js";
 
 describe("analyzeRepoSync", () => {
   const branchMap = buildHgToGitBranchMap({ defaultBranch: "master" });
@@ -80,6 +83,96 @@ describe("analyzeRepoSync", () => {
     }, branchMap);
     expect(info.status).toBe("repo_mismatch");
     expect(info.repoPathMismatch).toBe(true);
+  });
+
+  it("syncs hg branches whose git names were sanitized", () => {
+    const hgName = "For Sprint 2016 - 5";
+    const gitName = "For_Sprint_2016_-_5";
+    const branchMap = mergeBranchesMap([hgName, "default"], "master");
+    const info = analyzeRepoSync("D:/hg", "D:/git", {
+      hg: {
+        valid: true,
+        tipRevision: 4,
+        branches: [
+          { name: "default", revision: 4 },
+          { name: hgName, revision: 4, tip: "abc" },
+        ],
+      },
+      git: {
+        valid: true,
+        branches: [
+          { name: "master", tip: "111" },
+          { name: gitName, tip: "222" },
+        ],
+      },
+      conversion: { importedTip: 5, hgRepo: "D:/hg", mappingEntries: 5, hasMarks: true },
+      branchLinks: [{ hgBranch: hgName, gitBranch: gitName, gitSha: "222" }],
+    }, branchMap);
+    const mapped = info.branchDeltas.find((b) => b.hgBranch === hgName);
+    expect(mapped?.status).toBe("synced");
+    expect(mapped?.gitBranch).toBe(gitName);
+    expect(info.branchDeltas.some((b) => b.status === "git_only" && b.name === gitName)).toBe(
+      false,
+    );
+  });
+
+  it("syncs historical hg branches without active heads via branch map", () => {
+    const hgName = "wireline2.1";
+    const branchMap = mergeBranchesMap(["default", hgName], "master");
+    const info = analyzeRepoSync("D:/hg", "D:/git", {
+      hg: {
+        valid: true,
+        tipRevision: 10,
+        branches: [
+          { name: "default", revision: 10 },
+          { name: hgName, tip: "fromgit" },
+        ],
+      },
+      git: {
+        valid: true,
+        branches: [
+          { name: "master", tip: "111" },
+          { name: hgName, tip: "fromgit" },
+        ],
+      },
+      conversion: { importedTip: 11, hgRepo: "D:/hg", mappingEntries: 11, hasMarks: true },
+      branchLinks: [],
+    }, branchMap);
+    const row = info.branchDeltas.find((b) => b.hgBranch === hgName);
+    expect(row?.status).toBe("synced");
+    expect(info.branchDeltas.some((b) => b.status === "git_only" && b.name === hgName)).toBe(
+      false,
+    );
+  });
+
+  it("syncs hg branches when git ref differs only by case", () => {
+    const branchMap = mergeBranchesMap(
+      ["default", "core", "Core", "nov-fleet-commands", "NOV-fleet-commands"],
+      "master",
+    );
+    const info = analyzeRepoSync("D:/hg", "D:/git", {
+      hg: {
+        valid: true,
+        tipRevision: 10,
+        branches: [
+          { name: "default", revision: 10 },
+          { name: "Core", tip: "aaa" },
+          { name: "NOV-fleet-commands", tip: "bbb" },
+        ],
+      },
+      git: {
+        valid: true,
+        branches: [
+          { name: "master", tip: "111" },
+          { name: "Core", tip: "aaa" },
+          { name: "NOV-fleet-commands", tip: "bbb" },
+        ],
+      },
+      conversion: { importedTip: 11, hgRepo: "D:/hg", mappingEntries: 11, hasMarks: true },
+      branchLinks: [],
+    }, branchMap);
+    expect(info.branchDeltas.filter((b) => b.status === "hg_only")).toHaveLength(0);
+    expect(info.branchDeltas.filter((b) => b.status === "synced")).toHaveLength(3);
   });
 
   it("lists git_only branches not matched by hg", () => {

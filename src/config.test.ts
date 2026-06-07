@@ -53,7 +53,7 @@ describe("loadConfig", () => {
     expect(loaded.defaultBranch).toBe("main");
     expect(loaded.checkoutWorkingTree).toBe(true);
     expect(loaded.hgTags).toBe(false);
-    expect(loaded.sanitizeNames).toBe(false);
+    expect(loaded.sanitizeNames).toBe(true);
     expect(loaded.repackAfterImport).toBe(true);
   });
 

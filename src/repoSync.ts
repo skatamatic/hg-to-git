@@ -2,7 +2,9 @@ import path from "node:path";
 import type { BranchInfo, ConversionState } from "./repoInfo.js";
 import {
   gitBranchForHg,
+  hgBranchForGit,
   matchedGitBranchNames,
+  resolveGitBranchName,
   type HgToGitBranchMap,
 } from "./branchMapping.js";
 
@@ -217,34 +219,38 @@ export function analyzeRepoSync(
       ? Math.min(100, Math.round((importWatermark / hgChangesetCount) * 100))
       : 0;
 
-  const linkedHg = new Set(snapshot.branchLinks.map((l) => l.hgBranch));
-  const gitNames = new Set(snapshot.git.branches.map((b) => b.name));
   const hgNames = new Set(snapshot.hg.branches.map((b) => b.name));
-  const gitMatchedByHg = matchedGitBranchNames(snapshot.hg.branches, branchMap);
+  const hgNamesLower = new Set(snapshot.hg.branches.map((b) => b.name.toLowerCase()));
+  const gitMatchedByHg = matchedGitBranchNames(
+    snapshot.hg.branches,
+    branchMap,
+    snapshot.git.branches,
+  );
 
   const branchDeltas: BranchDelta[] = [];
 
   for (const b of snapshot.hg.branches) {
     const rev = b.revision ?? 0;
-    const gitBranch = gitBranchForHg(b.name, branchMap);
-    const gitBranchInfo = snapshot.git.branches.find((g) => g.name === gitBranch);
+    const mappedGit = gitBranchForHg(b.name, branchMap);
+    const actualGit = resolveGitBranchName(snapshot.git.branches, mappedGit);
+    const gitBranchInfo = actualGit
+      ? snapshot.git.branches.find((g) => g.name === actualGit)
+      : undefined;
     let status: BranchDeltaStatus;
     if (!snapshot.conversion) {
       status = "hg_only";
     } else if (rev >= importWatermark) {
       status = "pending";
-    } else if (gitNames.has(gitBranch)) {
-      status =
-        linkedHg.has(b.name) || linkedHg.has(gitBranch) || gitBranch !== b.name
-          ? "synced"
-          : "unmapped";
+    } else if (actualGit) {
+      status = "synced";
     } else {
       status = "hg_only";
     }
     branchDeltas.push({
       name: b.name,
       hgBranch: b.name,
-      gitBranch: gitBranch !== b.name ? gitBranch : undefined,
+      gitBranch:
+        actualGit && actualGit !== b.name ? actualGit : undefined,
       status,
       hgRevision: b.revision,
       hgTip: b.tip,
@@ -254,7 +260,8 @@ export function analyzeRepoSync(
 
   for (const g of snapshot.git.branches) {
     if (gitMatchedByHg.has(g.name)) continue;
-    if (hgNames.has(g.name)) continue;
+    if (hgNames.has(g.name) || hgNamesLower.has(g.name.toLowerCase())) continue;
+    if (hgBranchForGit(g.name, branchMap)) continue;
     branchDeltas.push({
       name: g.name,
       gitBranch: g.name,

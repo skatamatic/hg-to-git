@@ -3,4 +3,6 @@ export interface SnapshotOptions {
   defaultBranch?: string;
   /** Path to hg-fast-export branch map (-B). */
   branchesMap?: string;
+  /** Path to hg-fast-export tag map (-T). */
+  tagsMap?: string;
 }

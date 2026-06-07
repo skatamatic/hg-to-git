@@ -3,8 +3,8 @@ import type { BranchDeltaStatus, BranchInfo, RepoSnapshot } from "../types";
 export interface AlignedBranchRow {
   id: string;
   status: BranchDeltaStatus;
-  hg: { name: string; revision?: number; tip?: string; commitCount?: number } | null;
-  git: { name: string; tip?: string; commitCount?: number } | null;
+  hg: { name: string; revision?: number; tip?: string } | null;
+  git: { name: string; tip?: string } | null;
 }
 
 const STATUS_SORT: Record<BranchDeltaStatus, number> = {
@@ -40,14 +40,12 @@ export function buildAlignedBranchRows(snapshot: RepoSnapshot): AlignedBranchRow
             name: hgName,
             revision: hgInfo?.revision ?? d.hgRevision,
             tip: hgInfo?.tip ?? d.hgTip,
-            commitCount: hgInfo?.commitCount,
           }
         : null,
       git: gitName
         ? {
             name: gitName,
             tip: gitInfo?.tip ?? d.gitTip,
-            commitCount: gitInfo?.commitCount,
           }
         : null,
     };

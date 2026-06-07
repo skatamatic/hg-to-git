@@ -130,9 +130,7 @@ export function SetupBranchDeltaAside({ snapshot }: Props) {
 }
 
 /** Stacked branch delta for narrow viewports (no resize). */
-export function SetupBranchDeltaAsideMobile({
-  snapshot,
-}: Props) {
+export function SetupBranchDeltaAsideMobile({ snapshot }: Props) {
   return (
     <aside className="surface-panel flex min-h-0 flex-col overflow-hidden lg:hidden">
       <header className="shrink-0 border-b border-border/50 px-3 py-1.5">

@@ -3,9 +3,11 @@ import {
   gitIdentityFromEntry,
   isAuthorMappingComplete,
   mergeAuthorMappings,
+  needsAuthorMapping,
   parseAuthorsMapContent,
   parseHgAuthorString,
   serializeAuthorsMap,
+  suggestGitIdentity,
 } from "./authorsMap.js";
 
 describe("parseHgAuthorString", () => {
@@ -19,6 +21,21 @@ describe("parseHgAuthorString", () => {
   it("parses email-only and bare names", () => {
     expect(parseHgAuthorString("ada@example.com").email).toBe("ada@example.com");
     expect(parseHgAuthorString("Bot User").name).toBe("Bot User");
+  });
+});
+
+describe("malformed author detection", () => {
+  it("flags empty and devnull identities", () => {
+    expect(needsAuthorMapping("<>")).toBe(true);
+    expect(needsAuthorMapping("devnull@localhost")).toBe(true);
+    expect(needsAuthorMapping("Ada <ada@example.com>")).toBe(false);
+  });
+
+  it("suggests safe git identities", () => {
+    expect(suggestGitIdentity("<>")).toBe("Mercurial <devnull@localhost>");
+    expect(suggestGitIdentity("Ada <ada@example.com>")).toBe(
+      "Ada <ada@example.com>",
+    );
   });
 });
 
@@ -46,9 +63,9 @@ describe("authors map round-trip", () => {
 
   it("detects complete mappings", () => {
     expect(isAuthorMappingComplete(sample[0])).toBe(true);
-    expect(
-      isAuthorMappingComplete({ hgAuthor: "x", gitName: "only-name" }),
-    ).toBe(true);
+    expect(isAuthorMappingComplete({ hgAuthor: "x", gitName: "only-name" })).toBe(
+      true,
+    );
     expect(isAuthorMappingComplete({ hgAuthor: "x" })).toBe(false);
   });
 });
@@ -57,13 +74,10 @@ describe("mergeAuthorMappings", () => {
   it("keeps existing entries and adds scanned authors", () => {
     const merged = mergeAuthorMappings(
       [{ hgAuthor: "A", gitName: "A", gitEmail: "a@x" }],
-      [
-        { hgAuthor: "B", commitCount: 2, suggestedName: "B", suggestedEmail: "b@x" },
-        { hgAuthor: "A", commitCount: 9 },
-      ],
+      [{ hgAuthor: "B" }, { hgAuthor: "A" }],
     );
     expect(merged.map((e) => e.hgAuthor)).toEqual(["A", "B"]);
     expect(merged[0].gitEmail).toBe("a@x");
-    expect(merged[1].gitEmail).toBe("b@x");
+    expect(merged[1].gitIdentity).toBe(suggestGitIdentity("B"));
   });
 });

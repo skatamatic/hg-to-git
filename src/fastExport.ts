@@ -11,10 +11,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HgToGitConfig } from "./config.js";
 import { findPython } from "./prerequisites.js";
+import { branchNameFromGitRef } from "./gitRefs.js";
+import {
+  ensureConversionStateBootstrap,
+  HG2GIT_STATE_PREFIX,
+  readImportedTip,
+} from "./conversionState.js";
 import { requireGit } from "./deps/resolveTools.js";
 
 const FAST_EXPORT_REPO = "https://github.com/frej/fast-export.git";
-const STATE_PREFIX = "hg2git";
+const STATE_PREFIX = HG2GIT_STATE_PREFIX;
 
 export interface ConvertResult {
   incremental: boolean;
@@ -88,15 +94,7 @@ function backupStateFiles(gitDirPath: string): void {
   }
 }
 
-export function readImportedTip(gitDirPath: string): number {
-  const state = path.join(gitDirPath, `${STATE_PREFIX}-state`);
-  if (!existsSync(state)) return 0;
-  for (const line of readFileSync(state, "utf8").split(/\r?\n/)) {
-    const m = line.match(/^:tip\s+(\d+)/);
-    if (m) return parseInt(m[1], 10);
-  }
-  return 0;
-}
+export { readImportedTip } from "./conversionState.js";
 
 function mergeMarks(gitDirPath: string): void {
   const marks = path.join(gitDirPath, `${STATE_PREFIX}-marks`);
@@ -127,7 +125,7 @@ function writeHeadsCache(gitRepo: string, gitDirPath: string): void {
       "-C",
       gitRepo,
       "for-each-ref",
-      "--format=%(refname:short)\t%(objectname)",
+      "--format=%(refname)\t%(objectname)",
       "refs/heads/",
     ],
     { encoding: "utf8", windowsHide: true, env: process.env },
@@ -135,7 +133,8 @@ function writeHeadsCache(gitRepo: string, gitDirPath: string): void {
   const lines: string[] = [];
   for (const line of (branches.stdout ?? "").split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const [head, sha] = line.split("\t");
+    const [ref, sha] = line.split("\t");
+    const head = ref ? branchNameFromGitRef(ref) : "";
     if (head && sha) lines.push(`:${head} ${sha.trim()}`);
   }
   writeFileSync(
@@ -184,10 +183,49 @@ function attachStderrLines(
   stream: NodeJS.ReadableStream,
   label: "hg-export" | "git-import",
   onLine?: (stream: "hg-export" | "git-import", line: string) => void,
+  tail?: string[],
 ): void {
-  if (!onLine) return;
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  rl.on("line", (line) => onLine(label, line));
+  rl.on("line", (line) => {
+    if (tail) {
+      tail.push(`[${label}] ${line}`);
+      if (tail.length > 16) tail.shift();
+    }
+    onLine?.(label, line);
+  });
+}
+
+function formatConversionFailure(
+  pyCode: number,
+  giCode: number,
+  tail: string[],
+): string {
+  const lines = [
+    `Conversion failed (hg-fast-export.py=${pyCode}, git fast-import=${giCode})`,
+  ];
+  const notable = tail.filter((l) =>
+    /not updating refs|fatal:|^error:/i.test(l),
+  );
+  const excerpt = (notable.length ? notable : tail).slice(-4);
+  if (excerpt.length) {
+    lines.push("", ...excerpt);
+  }
+  if (tail.some((l) => /not updating refs/i.test(l))) {
+    lines.push(
+      "",
+      "Git fast-import refused to move one or more branch tips (not a fast-forward update). " +
+        "This often happens after a partial import — reset the Git target and run again.",
+    );
+  }
+  if (tail.some((l) => /Invalid raw date/i.test(l))) {
+    lines.push(
+      "",
+      "Git fast-import rejected a malformed author/committer identity from Mercurial " +
+        "(often `<> <devnull@localhost>`). hg-to-git should auto-generate authors.map; " +
+        "if this persists, add manual mappings and retry.",
+    );
+  }
+  return lines.join("\n");
 }
 
 function buildPythonArgs(
@@ -214,7 +252,14 @@ function runPipe(
   handlers?: ConvertStreamHandlers,
 ): Promise<void> {
   const marksTmp = path.join(gitDirPath, `${STATE_PREFIX}-marks.tmp`);
-  const gfiArgs = ["-C", gitRepo, "fast-import", `--export-marks=${marksTmp}`];
+  const gfiArgs = [
+    "-C",
+    gitRepo,
+    "fast-import",
+    `--export-marks=${marksTmp}`,
+    // hg history rarely matches prior git refs; required after partial/failed runs.
+    "--force",
+  ];
   if (quiet) gfiArgs.push("--quiet");
   if (force) gfiArgs.push("--force");
 
@@ -222,6 +267,8 @@ function runPipe(
   const pythonPath = [fastExportDir, process.env.PYTHONPATH]
     .filter(Boolean)
     .join(pathSep);
+
+  const stderrTail: string[] = [];
 
   return new Promise((resolve, reject) => {
     const py = spawn(python, ["-u", ...pyArgs], {
@@ -241,8 +288,8 @@ function runPipe(
       windowsHide: true,
       env: process.env,
     });
-    attachStderrLines(py.stderr!, "hg-export", handlers?.onLine);
-    attachStderrLines(gi.stderr!, "git-import", handlers?.onLine);
+    attachStderrLines(py.stderr!, "hg-export", handlers?.onLine, stderrTail);
+    attachStderrLines(gi.stderr!, "git-import", handlers?.onLine, stderrTail);
     py.stdout!.pipe(gi.stdin!);
     let pyCode: number | null = null;
     let giCode: number | null = null;
@@ -250,9 +297,7 @@ function runPipe(
       if (pyCode === null || giCode === null) return;
       if (pyCode !== 0 || giCode !== 0) {
         reject(
-          new Error(
-            `Conversion failed (hg-fast-export.py=${pyCode}, git fast-import=${giCode})`,
-          ),
+          new Error(formatConversionFailure(pyCode, giCode, stderrTail)),
         );
       } else resolve();
     };
@@ -277,6 +322,7 @@ export async function convertHgToGit(
   const fastExportDir = ensureFastExport(config.fastExportPath);
   const python = findPython(config.python);
   const gd = gitDir(config.gitRepo);
+  ensureConversionStateBootstrap(gd, config.hgRepo);
   const tipBefore = readImportedTip(gd);
   const incremental = tipBefore > 0;
 

@@ -3,19 +3,27 @@
   "version": "1.0.0",
   "description": "Convert Mercurial repositories to Git with incremental sync support",
   "type": "module",
-  "main": "dist/electron/main.js",
+  "main": "dist/electron/entry.js",
   "bin": {
-    "hg-to-git": "./dist/cli.js"
+    "hg-to-git": "./bin/hg-to-git.js"
   },
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').copyFileSync('src/hgFastExportLauncher.py','dist/hgFastExportLauncher.py')\"",
+    "prepack": "npm run build",
     "build:web": "npm install --prefix web && npm run build --prefix web",
     "build:web:electron": "cross-env VITE_RELATIVE_BASE=1 npm run build --prefix web",
     "build:all": "npm run build && npm run build:web",
     "build:app": "npm run build && npm run build:web:electron",
     "install:web": "npm install --prefix web",
-    "start": "node dist/cli.js",
-    "convert": "node dist/cli.js convert",
+    "start": "hg-to-git",
+    "convert": "hg-to-git convert",
+    "link:cli": "npm run build && npm link",
+    "unlink:cli": "npm unlink -g hg-to-git",
     "ui": "node dist/server/index.js",
     "dev:ui": "npm run build && concurrently -k -n tsc,api,web -c blue,magenta,green \"tsc -w\" \"node --watch dist/server/index.js\" \"wait-on file:.dev-api-port && npm run dev --prefix web\"",
     "electron:dev": "npm run build && concurrently -k -n tsc,api,web,electron \"tsc -w\" \"node --watch dist/server/index.js\" \"wait-on file:.dev-api-port && npm run dev --prefix web\" \"wait-on tcp:127.0.0.1:5173 && cross-env NODE_ENV=development electron .\"",
@@ -60,6 +68,12 @@
       "dist/**/*",
       "web/dist/**/*",
       "package.json"
+    ],
+    "extraFiles": [
+      {
+        "from": "packaging/hg-to-git-cli.cmd",
+        "to": "hg-to-git-cli.cmd"
+      }
     ],
     "asar": true,
     "win": {

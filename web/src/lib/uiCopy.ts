@@ -25,4 +25,9 @@ export const UI_COPY = {
   dontSave: "Don't save",
   cancel: "Cancel",
   quitAnyway: "Quit anyway",
+  deleteProject: "Delete Project",
+  deleteProjectTitle: "Delete project?",
+  deleteProjectDetail: (name: string) =>
+    `Remove “${name}” from your workspace? Repository folders on disk are not deleted.`,
+  delete: "Delete",
 } as const;

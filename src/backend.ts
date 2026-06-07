@@ -1,6 +1,8 @@
 import { loadConfig, resolveConfigPath } from "./config.js";
 import { runConversionInWorker } from "./convertRunner.js";
 import { clearHgNodeToGitCache, getBranchHistory } from "./branchHistory.js";
+import { ensureBranchesMapForConvert } from "./branchesMap.js";
+import { ensureTagsMapForConvert } from "./tagsMap.js";
 import { getRepoSnapshotAsync } from "./repoSnapshotAsync.js";
 import type { SnapshotOptions } from "./snapshotOptions.js";
 import { runValidateInWorker } from "./validateRunner.js";
@@ -20,17 +22,18 @@ import {
   type ToolId,
 } from "./deps/toolchain.js";
 import {
-  apiParseAuthorsMapFile,
-  apiScanHgAuthors,
-} from "./authorsMap.js";
-import { pickPath as pickPathSystem } from "./server/pickFolder.js";
+  pickPath as pickPathSystem,
+  pickSavePath as pickSavePathSystem,
+} from "./server/pickFolder.js";
 import { loadUiSettings, saveUiSettings, type UiSettings } from "./server/persist.js";
 import {
   apiCreateProject,
   apiDeleteProject,
   apiGetProjectsState,
+  apiImportProjectFromFile,
   apiOpenProject,
   apiSaveProject,
+  apiSaveProjectToFile,
   apiUpdateActiveProjectRun,
   getActiveProject,
   syncLegacySettingsFromProject,
@@ -43,8 +46,10 @@ export {
   apiCreateProject,
   apiDeleteProject,
   apiGetProjectsState,
+  apiImportProjectFromFile,
   apiOpenProject,
   apiSaveProject,
+  apiSaveProjectToFile,
   getActiveProject,
   syncLegacySettingsFromProject,
 };
@@ -82,6 +87,44 @@ export async function apiSaveSettings(
   return saveUiSettings(partial);
 }
 
+async function resolveSnapshotOptions(
+  hgRepo: string,
+  gitRepo: string,
+  options: SnapshotOptions = {},
+): Promise<SnapshotOptions> {
+  let snapshotOpts: SnapshotOptions = { ...options };
+  try {
+    const branchesMap = await ensureBranchesMapForConvert({
+      gitRepo,
+      hgRepo,
+      defaultBranch: options.defaultBranch,
+      branchesMap: options.branchesMap,
+      // Snapshot refresh only needs active heads; historical names stay in the file.
+      includeHistoricalBranchNames: false,
+    });
+    const tagsMap = await ensureTagsMapForConvert({
+      gitRepo,
+      hgRepo,
+      tagsMap: options.tagsMap,
+    });
+    const config = await loadConfig(resolveConfigPath(gitRepo), {
+      hgRepo,
+      gitRepo,
+      defaultBranch: options.defaultBranch,
+      branchesMap,
+      tagsMap,
+    });
+    snapshotOpts = {
+      defaultBranch: config.defaultBranch,
+      branchesMap: config.branchesMap ?? branchesMap,
+      tagsMap: config.tagsMap ?? tagsMap,
+    };
+  } catch {
+    if (!snapshotOpts.defaultBranch) snapshotOpts.defaultBranch = "master";
+  }
+  return snapshotOpts;
+}
+
 export async function apiGetSnapshot(
   hgRepo: string,
   gitRepo: string,
@@ -92,22 +135,7 @@ export async function apiGetSnapshot(
     throw new Error("hgRepo and gitRepo required");
   }
 
-  let snapshotOpts: SnapshotOptions = { ...options };
-  try {
-    const config = await loadConfig(resolveConfigPath(gitRepo), {
-      hgRepo,
-      gitRepo,
-      defaultBranch: options.defaultBranch,
-      branchesMap: options.branchesMap,
-    });
-    snapshotOpts = {
-      defaultBranch: config.defaultBranch,
-      branchesMap: config.branchesMap,
-    };
-  } catch {
-    if (!snapshotOpts.defaultBranch) snapshotOpts.defaultBranch = "master";
-  }
-
+  const snapshotOpts = await resolveSnapshotOptions(hgRepo, gitRepo, options);
   return getRepoSnapshotAsync(hgRepo, gitRepo, snapshotOpts, onProgress);
 }
 
@@ -147,23 +175,33 @@ export function apiFixGitIgnoreCase(gitRepo: string) {
   return { ok: true as const, ignoreCase };
 }
 
-export function apiGetHgAuthors(hgRepo: string) {
-  return apiScanHgAuthors(hgRepo);
-}
-
-export function apiImportAuthorsMap(filePath: string) {
-  return apiParseAuthorsMapFile(filePath);
-}
-
 export function apiPickPathSystem(options: {
   kind: "directory" | "file";
   title?: string;
   defaultPath?: string;
+  fileFilter?: "project" | "all";
 }) {
   const result = pickPathSystem(options.kind, {
     title: options.title,
     defaultPath: options.defaultPath,
+    fileFilter: options.fileFilter,
   });
+  if (result.error) {
+    return { path: null, cancelled: true, error: result.error };
+  }
+  return {
+    path: result.path,
+    cancelled: result.cancelled ?? result.path == null,
+  };
+}
+
+export function apiPickSavePathSystem(options: {
+  title?: string;
+  defaultPath?: string;
+  suggestedName?: string;
+  fileFilter?: "project" | "all";
+}) {
+  const result = pickSavePathSystem(options);
   if (result.error) {
     return { path: null, cancelled: true, error: result.error };
   }
@@ -191,20 +229,24 @@ export async function apiConvert(
     const { result } = await runConversionInWorker(body, onLog);
     const config = await loadConfig(undefined, body);
     clearHgNodeToGitCache(config.gitRepo);
-    const snapshot = await getRepoSnapshotAsync(
+    const snapshotOpts = await resolveSnapshotOptions(
       config.hgRepo,
       config.gitRepo,
       {
         defaultBranch: config.defaultBranch,
         branchesMap: config.branchesMap,
+        tagsMap: config.tagsMap,
       },
+    );
+    const snapshot = await getRepoSnapshotAsync(
+      config.hgRepo,
+      config.gitRepo,
+      snapshotOpts,
       onSnapshotProgress,
     );
     await apiUpdateActiveProjectRun("success", {
       hgRepo: config.hgRepo,
       gitRepo: config.gitRepo,
-      authorsMap: config.authorsMap,
-      authorMappings: body.authorMappings as Project["authorMappings"],
       defaultBranch: config.defaultBranch,
       checkoutWorkingTree: config.checkoutWorkingTree,
     });

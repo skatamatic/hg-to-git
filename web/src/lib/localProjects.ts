@@ -1,4 +1,5 @@
 import type { Project, ProjectsState } from "../types";
+import { applyRecent, ensureRecentPopulated } from "./recentProjects";
 
 const KEY = "hg-to-git-projects";
 
@@ -16,11 +17,12 @@ export function loadLocalProjects(): ProjectsState {
     if (!raw) return { version: 1, lastProjectId: null, projects: [] };
     const parsed = JSON.parse(raw) as ProjectsState;
     if (parsed.version === 1 && Array.isArray(parsed.projects)) {
-      return {
+      return ensureRecentPopulated({
         version: 1,
         lastProjectId: parsed.lastProjectId ?? null,
         projects: parsed.projects,
-      };
+        recentProjectIds: parsed.recentProjectIds ?? [],
+      });
     }
   } catch {
     /* */
@@ -53,6 +55,7 @@ export function localCreateProject(input?: {
     version: 1,
     lastProjectId: project.id,
     projects: [project, ...state.projects],
+    recentProjectIds: state.recentProjectIds,
   };
   saveLocalProjects(next);
   return { state: next, project };
@@ -63,7 +66,7 @@ export function localOpenProject(id: string): ProjectsState {
   if (!state.projects.some((p) => p.id === id)) {
     throw new Error("Project not found");
   }
-  const next = { ...state, lastProjectId: id };
+  const next = applyRecent({ ...state, lastProjectId: id }, id);
   saveLocalProjects(next);
   return next;
 }
@@ -85,11 +88,15 @@ export function localSaveProject(
   };
   const projects = [...state.projects];
   projects[idx] = project;
-  const next: ProjectsState = {
+  let next: ProjectsState = {
     version: 1,
     lastProjectId: state.lastProjectId ?? id,
     projects,
+    recentProjectIds: state.recentProjectIds,
   };
+  if (partial.projectFile !== undefined) {
+    next = applyRecent(next, id);
+  }
   saveLocalProjects(next);
   return { state: next, project };
 }
@@ -99,7 +106,15 @@ export function localDeleteProject(id: string): ProjectsState {
   const projects = state.projects.filter((p) => p.id !== id);
   let lastProjectId = state.lastProjectId;
   if (lastProjectId === id) lastProjectId = projects[0]?.id ?? null;
-  const next: ProjectsState = { version: 1, lastProjectId, projects };
+  const recentProjectIds = (state.recentProjectIds ?? []).filter(
+    (recentId) => recentId !== id,
+  );
+  const next: ProjectsState = {
+    version: 1,
+    lastProjectId,
+    projects,
+    recentProjectIds,
+  };
   saveLocalProjects(next);
   return next;
 }

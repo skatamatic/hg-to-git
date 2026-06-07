@@ -85,9 +85,9 @@ export async function loadConfig(
   return {
     defaultBranch: "master",
     hgTags: true,
-    sanitizeNames: false,
     repackAfterImport: true,
     ...merged,
+    sanitizeNames: merged.sanitizeNames ?? true,
     checkoutWorkingTree,
     hgRepo: path.resolve(merged.hgRepo),
     gitRepo: path.resolve(merged.gitRepo),

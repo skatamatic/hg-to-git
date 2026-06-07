@@ -10,20 +10,26 @@ import {
   confirmAppQuit,
   fetchSnapshot,
   fetchToolchain,
+  pickPath,
+  pickSavePath,
   runConvert,
   subscribeRequestExit,
 } from "./api";
 import { AppDialog } from "./components/AppDialog";
+import {
+  AppDialogFooterTriple,
+  AppDialogFooterPair,
+} from "./components/AppDialogFooter";
 import { AppShell } from "./components/AppShell";
 import { ResultsView } from "./components/ResultsView";
 import { SetupView } from "./components/SetupView";
 import { SimpleModeView } from "./components/SimpleModeView";
 import { StartupBlockingOverlay } from "./components/StartupBlockingOverlay";
-import { Button } from "./components/ui/button";
 import { parseViewCommand, useAppCommands } from "./hooks/useAppCommands";
 import { useProjectDraft } from "./hooks/useProjectDraft";
 import { isProjectConfigured } from "./lib/simpleMode";
 import { projectDraftPartial } from "./lib/projectDirty";
+import { defaultProjectFileName } from "./lib/projectFile";
 import { progressFromLogs } from "./lib/progressFromLogs";
 import { resolveStartupBlockingMode } from "./lib/startupOverlay";
 import { UI_COPY } from "./lib/uiCopy";
@@ -52,7 +58,8 @@ function loadOutputPrefs(): { open: boolean; height: number } {
 type PendingNav =
   | { type: "exit" }
   | { type: "open"; projectId: string }
-  | { type: "new" };
+  | { type: "new" }
+  | { type: "load"; filePath: string };
 
 type ExitDialog = "convert-warning" | "unsaved" | null;
 
@@ -64,6 +71,9 @@ export default function App() {
     updateProject,
     newProject,
     switchProject,
+    removeProject,
+    loadProjectFromFile,
+    writeProjectToFile,
     syncMenuState,
     error: projectError,
     setError: setProjectError,
@@ -95,6 +105,7 @@ export default function App() {
   const loadedProjectId = useRef<string | null>(null);
   const convertAbortRef = useRef<(() => void) | null>(null);
   const [exitDialog, setExitDialog] = useState<ExitDialog>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
 
   const { draft, patchDraft, isDirty, setDraft } = useProjectDraft(activeProject);
@@ -190,9 +201,54 @@ export default function App() {
     await updateProject(projectDraftPartial(draft));
   }, [draft, updateProject]);
 
+  const resetWorkspaceUi = useCallback(() => {
+    projectLoadGen.current += 1;
+    loadedProjectId.current = null;
+    convertAbortRef.current?.();
+    convertAbortRef.current = null;
+    clearLogs();
+    setSnapshot(null);
+    setSnapshotRefreshing(false);
+    setSnapshotLoadDetail(null);
+    setRunning(false);
+    setRunStatus("idle");
+    setRunNotice(null);
+    setResultMeta({});
+    setView("setup");
+  }, [clearLogs]);
+
   const discardDraft = useCallback(() => {
     if (activeProject) setDraft({ ...activeProject });
   }, [activeProject, setDraft]);
+
+  const persistProjectFile = useCallback(
+    async (saveAs: boolean) => {
+      if (!draft?.id) return;
+      const partial = projectDraftPartial(draft);
+      await updateProject(partial);
+
+      let filePath = draft.projectFile;
+      if (saveAs || !filePath) {
+        const picked = await pickSavePath({
+          title: saveAs ? "Save Project As" : "Save Project",
+          defaultPath:
+            filePath ||
+            draft.projectFile ||
+            draft.gitRepo ||
+            draft.hgRepo ||
+            undefined,
+          suggestedName: defaultProjectFileName(draft.name),
+          fileFilter: "project",
+        });
+        if (picked.cancelled || !picked.path) return;
+        if (picked.error) throw new Error(picked.error);
+        filePath = picked.path;
+      }
+
+      await writeProjectToFile(draft.id, filePath);
+    },
+    [draft, updateProject, writeProjectToFile],
+  );
 
   const finishQuit = useCallback(() => {
     convertAbortRef.current?.();
@@ -212,15 +268,29 @@ export default function App() {
         return;
       }
       if (action.type === "new") {
+        resetWorkspaceUi();
         await newProject();
-        setView("setup");
         return;
       }
       if (action.type === "open") {
+        resetWorkspaceUi();
         await switchProject(action.projectId);
+        return;
+      }
+      if (action.type === "load") {
+        resetWorkspaceUi();
+        await loadProjectFromFile(action.filePath);
       }
     },
-    [discardDraft, finishQuit, newProject, saveDraft, switchProject],
+    [
+      discardDraft,
+      finishQuit,
+      loadProjectFromFile,
+      newProject,
+      resetWorkspaceUi,
+      saveDraft,
+      switchProject,
+    ],
   );
 
   const beginExitFlow = useCallback(
@@ -398,13 +468,11 @@ export default function App() {
       {
         hgRepo: project.hgRepo,
         gitRepo: project.gitRepo,
-        authorsMap: project.authorsMap,
-        authorMappings: project.authorMappings,
         defaultBranch: project.defaultBranch ?? "master",
         checkoutWorkingTree: project.checkoutWorkingTree,
-        sanitizeNames: false,
         hgTags: true,
         repackAfterImport: true,
+        ignoreUnnamedHeads: true,
         force: options?.force ?? false,
       },
       {
@@ -480,8 +548,8 @@ export default function App() {
             beginExitFlow({ type: "new" });
             break;
           }
+          resetWorkspaceUi();
           await newProject();
-          setView("setup");
           break;
         case "file:open-project": {
           const id = (payload as { projectId?: string })?.projectId;
@@ -490,11 +558,35 @@ export default function App() {
             beginExitFlow({ type: "open", projectId: id });
             break;
           }
+          resetWorkspaceUi();
           await switchProject(id);
           break;
         }
+        case "file:load-project": {
+          const picked = await pickPath({
+            kind: "file",
+            title: "Load Project",
+            fileFilter: "project",
+          });
+          if (picked.cancelled || !picked.path) break;
+          if (picked.error) throw new Error(picked.error);
+          if (isDirty) {
+            beginExitFlow({ type: "load", filePath: picked.path });
+            break;
+          }
+          resetWorkspaceUi();
+          await loadProjectFromFile(picked.path);
+          break;
+        }
         case "file:save-project":
-          await saveDraft();
+          await persistProjectFile(false);
+          break;
+        case "file:save-project-as":
+          await persistProjectFile(true);
+          break;
+        case "file:delete-project":
+          if (!activeProject?.id) break;
+          setDeleteDialogOpen(true);
           break;
         case "view:toggle-output":
           if (!project?.simpleMode) {
@@ -536,18 +628,28 @@ export default function App() {
       beginExitFlow,
       handleConvert,
       isDirty,
+      loadProjectFromFile,
       menuRestricted,
       newProject,
       patchDraft,
+      persistProjectFile,
       project,
       projectConfigured,
-      saveDraft,
+      resetWorkspaceUi,
       setProjectError,
       setTheme,
       switchProject,
       toggleTheme,
     ],
   );
+
+  const handleDeleteProject = useCallback(async () => {
+    if (!activeProject?.id) return;
+    setDeleteDialogOpen(false);
+    discardDraft();
+    resetWorkspaceUi();
+    await removeProject(activeProject.id);
+  }, [activeProject?.id, discardDraft, removeProject, resetWorkspaceUi]);
 
   useAppCommands(({ command, payload }) => {
     void handleMenuCommand(command, payload);
@@ -575,7 +677,7 @@ export default function App() {
           void handleMenuCommand("file:new-project");
         } else if (e.key === "s") {
           e.preventDefault();
-          void saveDraft();
+          void persistProjectFile(false);
         } else if (
           e.key === "Enter" &&
           (view === "results" || simpleModeActive)
@@ -593,7 +695,7 @@ export default function App() {
     menuRestricted,
     project,
     running,
-    saveDraft,
+    persistProjectFile,
     simpleModeActive,
     view,
   ]);
@@ -604,72 +706,84 @@ export default function App() {
         open={exitDialog === "unsaved"}
         title={UI_COPY.saveChangesTitle}
         description={UI_COPY.saveChangesDetail}
+        size="lg"
         footer={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
+          <AppDialogFooterTriple
+            cancel={{
+              label: UI_COPY.cancel,
+              onClick: () => {
                 setExitDialog(null);
                 setPendingNav(null);
-              }}
-            >
-              {UI_COPY.cancel}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
+              },
+            }}
+            secondary={{
+              label: UI_COPY.dontSave,
+              onClick: () => {
                 const action = pendingNav;
                 setExitDialog(null);
                 setPendingNav(null);
                 if (action) void runPendingNav(action, false);
-              }}
-            >
-              {UI_COPY.dontSave}
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => {
+              },
+            }}
+            primary={{
+              label: UI_COPY.save,
+              onClick: () => {
                 const action = pendingNav;
                 setExitDialog(null);
                 setPendingNav(null);
                 if (action) void runPendingNav(action, true);
-              }}
-            >
-              {UI_COPY.save}
-            </Button>
-          </>
+              },
+            }}
+          />
         }
       />
       <AppDialog
         open={exitDialog === "convert-warning"}
         title={UI_COPY.quitDuringConvertTitle}
         description={UI_COPY.quitDuringConvertDetail}
+        tone="warning"
         footer={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
+          <AppDialogFooterPair
+            cancel={{
+              label: UI_COPY.cancel,
+              onClick: () => {
                 setExitDialog(null);
                 setPendingNav(null);
-              }}
-            >
-              {UI_COPY.cancel}
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => {
+              },
+            }}
+            confirm={{
+              label: UI_COPY.quitAnyway,
+              variant: "destructive",
+              onClick: () => {
                 setExitDialog(null);
                 setPendingNav(null);
                 finishQuit();
-              }}
-            >
-              {UI_COPY.quitAnyway}
-            </Button>
-          </>
+              },
+            }}
+          />
+        }
+      />
+      <AppDialog
+        open={deleteDialogOpen}
+        title={UI_COPY.deleteProjectTitle}
+        description={
+          project?.name
+            ? UI_COPY.deleteProjectDetail(project.name)
+            : undefined
+        }
+        tone="destructive"
+        footer={
+          <AppDialogFooterPair
+            cancel={{
+              label: UI_COPY.cancel,
+              onClick: () => setDeleteDialogOpen(false),
+            }}
+            confirm={{
+              label: UI_COPY.delete,
+              variant: "destructive",
+              onClick: () => void handleDeleteProject(),
+            }}
+          />
         }
       />
     </>

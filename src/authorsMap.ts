@@ -1,147 +1,128 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import {
-  getResolvedTools,
-  refreshResolvedTools,
-} from "./deps/resolveTools.js";
-import { assertHgRepo } from "./prerequisites.js";
+import { loadConfig, resolveConfigPath } from "./config.js";
+import { getResolvedTools } from "./deps/resolveTools.js";
 
-export interface AuthorMappingEntry {
+export interface AuthorMapEntry {
   hgAuthor: string;
   gitName?: string;
   gitEmail?: string;
-  /** Full Git author string; overrides gitName/gitEmail when set. */
   gitIdentity?: string;
 }
 
-export interface HgAuthorScanRow {
-  hgAuthor: string;
-  commitCount: number;
-  suggestedName?: string;
-  suggestedEmail?: string;
+/** hg-fast-export / git fast-import rejects empty display names. */
+const FALLBACK_AUTHOR_MAPPINGS: Record<string, string> = {
+  "": "Mercurial <devnull@localhost>",
+  "<>": "Mercurial <devnull@localhost>",
+  "devnull@localhost": "Mercurial <devnull@localhost>",
+  "<devnull@localhost>": "Mercurial <devnull@localhost>",
+  "<> <devnull@localhost>": "Mercurial <devnull@localhost>",
+};
+
+export function defaultAuthorsMapPath(gitRepo: string): string {
+  return path.join(gitRepo, ".hg-to-git", "authors.map");
 }
 
-/** Read author lines from full hg history (Mercurial has no `all` revset). */
-function hgLogAuthors(hgRepo: string): string {
-  refreshResolvedTools();
-  const hg = getResolvedTools().hg;
-  if (!hg) {
-    throw new Error("Mercurial (hg) is not installed or not on PATH");
-  }
-
-  const attempts: { args: string[]; label: string }[] = [
-    {
-      label: "0:tip",
-      args: ["-R", hgRepo, "log", "-r", "0:tip", "-T", "{author}\n"],
-    },
-    {
-      label: "default walk",
-      args: ["-R", hgRepo, "log", "-T", "{author}\n"],
-    },
-  ];
-
-  let lastErr = "";
-  for (const { args, label } of attempts) {
-    const r = spawnSync(hg, args, {
-      encoding: "utf8",
-      windowsHide: true,
-      env: process.env,
-    });
-    if (r.status === 0) return (r.stdout ?? "").trimEnd();
-    lastErr =
-      (r.stderr ?? r.stdout ?? "").trim() ||
-      `hg log failed (${label}, exit ${r.status ?? "?"})`;
-  }
-
-  throw new Error(lastErr || "hg log failed");
-}
-
-/** Heuristic parse of Mercurial author strings (e.g. `Name <email>`). */
-export function parseHgAuthorString(hgAuthor: string): {
+export function parseHgAuthorString(raw: string): {
   name?: string;
   email?: string;
 } {
-  const trimmed = hgAuthor.trim();
-  const angle = trimmed.match(/^(.+?)\s*<([^>]+)>\s*$/);
-  if (angle) {
-    return { name: angle[1]!.trim(), email: angle[2]!.trim() };
+  const s = raw.trim();
+  const angled = s.match(/^([^<]*?)\s*<([^>]+)>$/);
+  if (angled) {
+    const name = angled[1]?.trim();
+    const email = angled[2]?.trim();
+    return {
+      name: name || undefined,
+      email: email || undefined,
+    };
   }
-  const emailOnly = trimmed.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
-  if (emailOnly) return { email: trimmed };
-  if (trimmed.includes("@")) {
-    const parts = trimmed.split(/\s+/);
-    const emailPart = parts.find((p) => p.includes("@"));
-    if (emailPart) {
-      const name = parts.filter((p) => p !== emailPart).join(" ").trim();
-      return {
-        name: name || undefined,
-        email: emailPart.replace(/^<|>$/g, ""),
-      };
-    }
-  }
-  return { name: trimmed || undefined };
+  if (/^[^\s<]+@[^\s>]+$/.test(s)) return { email: s };
+  if (s) return { name: s };
+  return {};
 }
 
-export function gitIdentityFromEntry(entry: AuthorMappingEntry): string | undefined {
-  const explicit = entry.gitIdentity?.trim();
-  if (explicit) return explicit;
+export function needsAuthorMapping(hgAuthor: string): boolean {
+  const key = hgAuthor.trim();
+  if (key in FALLBACK_AUTHOR_MAPPINGS) return true;
+  const { name, email } = parseHgAuthorString(key);
+  if (!name || name === "<>" || /^[<>]+$/.test(name)) return true;
+  if (email && !email.includes("@")) return true;
+  return false;
+}
+
+export function suggestGitIdentity(hgAuthor: string): string {
+  const { name, email } = parseHgAuthorString(hgAuthor.trim());
+  if (
+    name &&
+    email &&
+    name !== "<>" &&
+    !/^[<>]+$/.test(name) &&
+    email.includes("@")
+  ) {
+    return `${name} <${email}>`;
+  }
+  if (email?.includes("@") && name && name !== "<>" && !/^[<>]+$/.test(name)) {
+    return `${name} <${email}>`;
+  }
+  if (email?.includes("@")) {
+    const local = email.split("@")[0] || "Mercurial";
+    return `${local} <${email}>`;
+  }
+  return "Mercurial <devnull@localhost>";
+}
+
+export function gitIdentityFromEntry(entry: AuthorMapEntry): string {
+  if (entry.gitIdentity?.trim()) return entry.gitIdentity.trim();
   const name = entry.gitName?.trim();
   const email = entry.gitEmail?.trim();
   if (name && email) return `${name} <${email}>`;
-  if (email) return email;
   if (name) return name;
-  return undefined;
+  if (email) return email;
+  return "";
 }
 
-export function isAuthorMappingComplete(entry: AuthorMappingEntry): boolean {
-  return Boolean(gitIdentityFromEntry(entry));
+export function isAuthorMappingComplete(entry: AuthorMapEntry): boolean {
+  return Boolean(
+    entry.gitIdentity?.trim() ||
+      entry.gitName?.trim() ||
+      entry.gitEmail?.trim(),
+  );
 }
 
-function escapeMapString(value: string): string {
-  return JSON.stringify(value);
+function unescapePythonString(raw: string): string {
+  return raw
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\");
 }
 
-export function serializeAuthorsMap(entries: AuthorMappingEntry[]): string {
-  const lines = [
-    "# Generated by hg-to-git (hg-fast-export author map, UTF-8)",
-    '# Format: "hg author string"="git author string"',
-    "",
-  ];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    const hg = entry.hgAuthor.trim();
-    if (!hg || seen.has(hg)) continue;
-    const git = gitIdentityFromEntry(entry);
-    if (!git) continue;
-    seen.add(hg);
-    lines.push(`${escapeMapString(hg)}=${escapeMapString(git)}`);
-  }
-  return lines.join("\n") + (lines.length > 3 ? "\n" : "");
+function escapePythonString(raw: string): string {
+  return raw
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
 }
 
-function decodeMapInner(inner: string): string {
-  try {
-    return JSON.parse(
-      `"${inner.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
-    ) as string;
-  } catch {
-    return inner;
-  }
-}
-
-export function parseAuthorsMapContent(content: string): AuthorMappingEntry[] {
-  const entries: AuthorMappingEntry[] = [];
-  const lineRe = /^"((?:\\.|[^"\\])*)"\s*=\s*"((?:\\.|[^"\\])*)"\s*$/;
-
-  for (const raw of content.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const m = line.match(lineRe);
+export function parseAuthorsMapContent(text: string): AuthorMapEntry[] {
+  const entries: AuthorMapEntry[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const m = trimmed.match(/^"(.*)"="(.*)"$/);
     if (!m) continue;
-    const hgAuthor = decodeMapInner(m[1]!);
-    const gitIdentity = decodeMapInner(m[2]!);
+    const hgAuthor = unescapePythonString(m[1]);
+    const gitIdentity = unescapePythonString(m[2]);
     const parsed = parseHgAuthorString(gitIdentity);
     entries.push({
       hgAuthor,
@@ -153,95 +134,137 @@ export function parseAuthorsMapContent(content: string): AuthorMappingEntry[] {
   return entries;
 }
 
-export async function readAuthorsMapFile(filePath: string): Promise<AuthorMappingEntry[]> {
-  if (!existsSync(filePath)) return [];
-  const content = await readFile(filePath, "utf8");
-  return parseAuthorsMapContent(content);
-}
-
-export function scanHgAuthors(hgRepo: string): HgAuthorScanRow[] {
-  assertHgRepo(hgRepo);
-  const out = hgLogAuthors(hgRepo);
-  const counts = new Map<string, number>();
-  for (const line of out.split(/\r?\n/)) {
-    const author = line.trim();
-    if (!author) continue;
-    counts.set(author, (counts.get(author) ?? 0) + 1);
+export function serializeAuthorsMap(entries: AuthorMapEntry[]): string {
+  const lines = [
+    "# Generated by hg-to-git (hg-fast-export author map, UTF-8)",
+    '# Format: "hg author string"="git author string"',
+    "",
+  ];
+  for (const entry of entries) {
+    const gitIdentity =
+      gitIdentityFromEntry(entry) || suggestGitIdentity(entry.hgAuthor);
+    lines.push(
+      `"${escapePythonString(entry.hgAuthor)}"="${escapePythonString(gitIdentity)}"`,
+    );
   }
-  return [...counts.entries()]
-    .map(([hgAuthor, commitCount]) => {
-      const { name, email } = parseHgAuthorString(hgAuthor);
-      return {
-        hgAuthor,
-        commitCount,
-        suggestedName: name,
-        suggestedEmail: email,
-      };
-    })
-    .sort((a, b) => b.commitCount - a.commitCount || a.hgAuthor.localeCompare(b.hgAuthor));
+  return lines.join("\n") + (entries.length ? "\n" : "");
 }
 
 export function mergeAuthorMappings(
-  existing: AuthorMappingEntry[],
-  scanned: HgAuthorScanRow[],
-): AuthorMappingEntry[] {
-  const byHg = new Map(existing.map((e) => [e.hgAuthor, { ...e }]));
-  for (const row of scanned) {
-    if (byHg.has(row.hgAuthor)) continue;
-    byHg.set(row.hgAuthor, {
-      hgAuthor: row.hgAuthor,
-      gitName: row.suggestedName,
-      gitEmail: row.suggestedEmail,
+  existing: AuthorMapEntry[],
+  scanned: Array<{ hgAuthor: string }>,
+): AuthorMapEntry[] {
+  const byHg = new Map<string, AuthorMapEntry>();
+  for (const entry of existing) {
+    if (!entry.hgAuthor) continue;
+    byHg.set(entry.hgAuthor, entry);
+  }
+  for (const { hgAuthor } of scanned) {
+    if (!hgAuthor || byHg.has(hgAuthor)) continue;
+    byHg.set(hgAuthor, {
+      hgAuthor,
+      gitIdentity: suggestGitIdentity(hgAuthor),
     });
   }
-  return [...byHg.values()].sort(
-    (a, b) => a.hgAuthor.localeCompare(b.hgAuthor),
+  return [...byHg.values()].sort((a, b) =>
+    a.hgAuthor.localeCompare(b.hgAuthor),
   );
 }
 
-export function defaultAuthorsMapPath(gitRepo: string): string {
-  return path.join(gitRepo, ".hg-to-git", "authors.map");
+function listHgAuthorStrings(hgRepo: string): string[] {
+  const hg = getResolvedTools().hg;
+  if (!hg || !hgRepo.trim() || !existsSync(path.join(hgRepo, ".hg"))) {
+    return [];
+  }
+  const r = spawnSync(
+    hg,
+    ["-R", hgRepo, "log", "-r", "all()", "-T", "{author|user}\n", "-q"],
+    { encoding: "utf8", windowsHide: true, env: process.env, maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (r.status !== 0) return [];
+  const names = new Set<string>();
+  for (const line of (r.stdout ?? "").split(/\r?\n/)) {
+    const author = line.trim();
+    if (author) names.add(author);
+  }
+  return [...names];
 }
 
-export async function writeProjectAuthorsMap(
+function loadAuthorsMapFile(filePath: string): AuthorMapEntry[] {
+  if (!existsSync(filePath)) return [];
+  return parseAuthorsMapContent(readFileSync(filePath, "utf8"));
+}
+
+function entriesFromFallbacks(): AuthorMapEntry[] {
+  return Object.entries(FALLBACK_AUTHOR_MAPPINGS).map(([hgAuthor, gitIdentity]) => ({
+    hgAuthor,
+    gitIdentity,
+  }));
+}
+
+function entriesNeedingMapping(hgAuthors: string[]): AuthorMapEntry[] {
+  return hgAuthors
+    .filter((author) => needsAuthorMapping(author))
+    .map((hgAuthor) => ({
+      hgAuthor,
+      gitIdentity: suggestGitIdentity(hgAuthor),
+    }));
+}
+
+function writeAuthorsMap(gitRepo: string, entries: AuthorMapEntry[]): string {
+  const outPath = defaultAuthorsMapPath(gitRepo);
+  mkdirSync(path.dirname(outPath), { recursive: true });
+  writeFileSync(outPath, serializeAuthorsMap(entries), "utf8");
+  return outPath;
+}
+
+async function resolveConfiguredAuthorsMapPath(
   gitRepo: string,
-  entries: AuthorMappingEntry[],
-): Promise<string> {
-  const mapPath = defaultAuthorsMapPath(gitRepo);
-  await mkdir(path.dirname(mapPath), { recursive: true });
-  await writeFile(mapPath, serializeAuthorsMap(entries), "utf8");
-  return mapPath;
-}
-
-/** Resolve authors.map path for conversion (project mappings take precedence). */
-export async function prepareAuthorsMapForConvert(opts: {
-  gitRepo: string;
-  authorMappings?: AuthorMappingEntry[];
-  authorsMap?: string;
-}): Promise<string | undefined> {
-  const mappings = opts.authorMappings?.filter((e) => e.hgAuthor.trim());
-  if (mappings?.length) {
-    const complete = mappings.filter(isAuthorMappingComplete);
-    if (complete.length === 0) return undefined;
-    return writeProjectAuthorsMap(opts.gitRepo, mappings);
+  explicit?: string,
+): Promise<string | undefined> {
+  if (explicit?.trim() && existsSync(explicit)) {
+    return path.resolve(explicit);
   }
-  if (opts.authorsMap?.trim() && existsSync(opts.authorsMap)) {
-    return path.resolve(opts.authorsMap);
+  const configPath = resolveConfigPath(gitRepo);
+  if (!configPath) return undefined;
+  try {
+    const config = await loadConfig(configPath, { gitRepo, hgRepo: gitRepo });
+    if (config.authorsMap && existsSync(config.authorsMap)) {
+      return config.authorsMap;
+    }
+  } catch {
+    /* ignore invalid repo config */
   }
-  const generated = defaultAuthorsMapPath(opts.gitRepo);
-  if (existsSync(generated)) return generated;
   return undefined;
 }
 
-export async function apiScanHgAuthors(hgRepo: string): Promise<HgAuthorScanRow[]> {
-  if (!hgRepo?.trim()) throw new Error("hgRepo is required");
-  return scanHgAuthors(hgRepo);
-}
+/**
+ * Build an authors.map for hg-fast-export, fixing malformed hg identities that
+ * make git fast-import reject commits (e.g. `<> <devnull@localhost>`).
+ */
+export async function prepareAuthorsMapForConvert(opts: {
+  gitRepo: string;
+  hgRepo?: string;
+  authorsMap?: string;
+}): Promise<string> {
+  const sources: AuthorMapEntry[] = [];
 
-export async function apiParseAuthorsMapFile(
-  filePath: string,
-): Promise<AuthorMappingEntry[]> {
-  if (!filePath?.trim()) throw new Error("filePath is required");
-  if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
-  return readAuthorsMapFile(filePath);
+  const configured = await resolveConfiguredAuthorsMapPath(
+    opts.gitRepo,
+    opts.authorsMap,
+  );
+  if (configured) sources.push(...loadAuthorsMapFile(configured));
+
+  const generated = defaultAuthorsMapPath(opts.gitRepo);
+  if (generated !== configured && existsSync(generated)) {
+    sources.push(...loadAuthorsMapFile(generated));
+  }
+
+  const hgAuthors = opts.hgRepo ? listHgAuthorStrings(opts.hgRepo) : [];
+  const merged = mergeAuthorMappings(sources, [
+    ...entriesFromFallbacks(),
+    ...entriesNeedingMapping(hgAuthors),
+  ]);
+
+  return writeAuthorsMap(opts.gitRepo, merged);
 }

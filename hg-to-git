@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+CLI="$ROOT/dist/cli.js"
+if [[ ! -f "$CLI" ]]; then
+  echo "hg-to-git: run npm run build first (dist/cli.js missing)" >&2
+  exit 1
+fi
+exec node "$CLI" "$@"

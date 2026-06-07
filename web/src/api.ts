@@ -7,8 +7,6 @@ import {
   saveLocalProjects,
 } from "./lib/localProjects";
 import type {
-  AuthorMappingEntry,
-  HgAuthorScanRow,
   Project,
   ProjectsState,
   BranchHistoryResult,
@@ -242,8 +240,55 @@ export async function deleteProject(id: string): Promise<ProjectsState> {
   }
 }
 
+export async function importProjectFromFile(
+  filePath: string,
+): Promise<{ state: ProjectsState; project: Project }> {
+  const b = bridge();
+  if (b?.importProjectFile) {
+    return (await b.importProjectFile(filePath)) as {
+      state: ProjectsState;
+      project: Project;
+    };
+  }
+  const result = await fetchJson<{ state: ProjectsState; project: Project }>(
+    `${API}/api/projects/import-file`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath }),
+    },
+  );
+  saveLocalProjects(result.state);
+  return result;
+}
+
+export async function saveProjectToFile(
+  id: string,
+  filePath: string,
+  partial?: Partial<Project>,
+): Promise<{ state: ProjectsState; project: Project }> {
+  const b = bridge();
+  if (b?.saveProjectFile) {
+    return (await b.saveProjectFile(id, filePath, partial)) as {
+      state: ProjectsState;
+      project: Project;
+    };
+  }
+  const result = await fetchJson<{ state: ProjectsState; project: Project }>(
+    `${API}/api/projects/${encodeURIComponent(id)}/save-file`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath, partial }),
+    },
+  );
+  saveLocalProjects(result.state);
+  return result;
+}
+
 export function syncMenu(state: {
   projects: Project[];
+  recentProjectIds?: string[];
   activeProjectId: string | null;
   view: string;
   simpleMode?: boolean;
@@ -275,28 +320,6 @@ export function confirmAppQuit(): void {
     return;
   }
   window.close();
-}
-
-export async function fetchHgAuthors(hgRepo: string): Promise<HgAuthorScanRow[]> {
-  const b = bridge();
-  if (b?.scanHgAuthors) {
-    return b.scanHgAuthors(hgRepo) as Promise<HgAuthorScanRow[]>;
-  }
-  return fetchJson<HgAuthorScanRow[]>(
-    `${API}/api/authors?${new URLSearchParams({ hgRepo })}`,
-  );
-}
-
-export async function importAuthorsMap(
-  filePath: string,
-): Promise<AuthorMappingEntry[]> {
-  const b = bridge();
-  if (b?.importAuthorsMap) {
-    return b.importAuthorsMap(filePath) as Promise<AuthorMappingEntry[]>;
-  }
-  return fetchJson<AuthorMappingEntry[]>(
-    `${API}/api/authors/import?${new URLSearchParams({ filePath })}`,
-  );
 }
 
 export async function fetchSnapshot(
@@ -485,6 +508,7 @@ export async function pickPath(options: {
   kind: "directory" | "file";
   title?: string;
   defaultPath?: string;
+  fileFilter?: "project" | "all";
 }): Promise<{ path: string | null; cancelled: boolean; error?: string }> {
   const b = bridge();
   if (b) {
@@ -527,6 +551,45 @@ export async function pickPath(options: {
       path: null,
       cancelled: true,
       error: `Cannot reach API: ${String(e)}. Run npm run dev:ui (browser) or npm run electron:dev (desktop).`,
+    };
+  }
+}
+
+export async function pickSavePath(options: {
+  title?: string;
+  defaultPath?: string;
+  suggestedName?: string;
+  fileFilter?: "project" | "all";
+}): Promise<{ path: string | null; cancelled: boolean; error?: string }> {
+  const b = bridge();
+  if (b?.pickSavePath) {
+    try {
+      return await b.pickSavePath(options);
+    } catch (e) {
+      return { path: null, cancelled: true, error: String(e) };
+    }
+  }
+
+  try {
+    const r = await fetch(`${API}/api/pick-save-path`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      return {
+        path: null,
+        cancelled: true,
+        error: String(data.error ?? r.statusText),
+      };
+    }
+    return data;
+  } catch (e) {
+    return {
+      path: null,
+      cancelled: true,
+      error: `Cannot reach API: ${String(e)}.`,
     };
   }
 }

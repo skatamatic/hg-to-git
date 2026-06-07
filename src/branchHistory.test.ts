@@ -12,6 +12,7 @@ import {
   parseCommitTagList,
   parseGitTagShowRef,
   parseHgLogOutput,
+  tallyHgBranchLabels,
 } from "./branchHistory.js";
 
 const fixtureRoot = path.join(
@@ -47,11 +48,23 @@ afterEach(() => {
   }
 });
 
+describe("tallyHgBranchLabels", () => {
+  it("counts changesets per branch label", () => {
+    const counts = tallyHgBranchLabels(
+      ["default", "feature", "default", "", "feature", "release"].join("\n"),
+    );
+    expect(counts.get("default")).toBe(2);
+    expect(counts.get("feature")).toBe(2);
+    expect(counts.get("release")).toBe(1);
+    expect(counts.size).toBe(3);
+  });
+});
+
 describe("parseHgLogOutput", () => {
   it("parses rev, node, tags, and skips invalid lines", () => {
     const out = [
-      "0|aaa|aaa|alice|init|",
-      "1|BBB|bbb|bob|second|v1.0, beta",
+      "0|aaa|aaa|alice|2015-03-11 13:52 -0600|init|",
+      "1|BBB|bbb|bob|2025-08-27 04:46 -0600|second|v1.0, beta",
       "not-valid",
       "",
     ].join("\n");
@@ -59,6 +72,7 @@ describe("parseHgLogOutput", () => {
     expect(commits).toHaveLength(2);
     expect(commits[1].revision).toBe(1);
     expect(commits[1].node).toBe("bbb");
+    expect(commits[1].date).toBe("2025-08-27 04:46 -0600");
     expect(commits[1].tags).toEqual(["v1.0", "beta"]);
   });
 });

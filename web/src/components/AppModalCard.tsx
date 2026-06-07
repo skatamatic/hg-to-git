@@ -5,9 +5,34 @@ interface Props {
   children: ReactNode;
   className?: string;
   footer?: ReactNode;
+  /** Centered loading/status cards vs. left-aligned confirmation dialogs. */
+  variant?: "status" | "dialog";
 }
 
-export function AppModalCard({ children, className, footer }: Props) {
+export function AppModalCard({
+  children,
+  className,
+  footer,
+  variant = "status",
+}: Props) {
+  if (variant === "dialog") {
+    return (
+      <div
+        className={cn(
+          "app-dialog-card w-full overflow-hidden rounded-xl border border-border/80 bg-elevated text-foreground shadow-2xl",
+          className,
+        )}
+      >
+        <div className="px-6 pt-6 pb-5">{children}</div>
+        {footer ? (
+          <div className="border-t border-border/35 bg-muted/20 px-6 py-4">
+            {footer}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(

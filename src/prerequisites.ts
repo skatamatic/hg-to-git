@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { ensureGitTargetInitialized } from "./gitTarget.js";
 import {
   refreshResolvedTools,
   requireGit,
@@ -36,10 +37,9 @@ export function assertHgRepo(hgRepo: string): void {
 }
 
 export function assertGitRepo(gitRepo: string): void {
+  ensureGitTargetInitialized(gitRepo);
   if (!existsSync(path.join(gitRepo, ".git"))) {
-    throw new Error(
-      `Not a Git repository: ${gitRepo}. Run: git init "${gitRepo}"`,
-    );
+    throw new Error(`Not a Git repository: ${gitRepo}`);
   }
 }
 

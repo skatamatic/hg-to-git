@@ -76,6 +76,7 @@ export function AppShell({
       )}
       <AppMenuBar
         projects={projectsState?.projects ?? []}
+        recentProjectIds={projectsState?.recentProjectIds}
         activeProjectId={projectsState?.lastProjectId ?? null}
         simpleMode={simpleMode}
         projectConfigured={canRun}

@@ -3,8 +3,10 @@ import {
   createProject,
   deleteProject,
   fetchProjects,
+  importProjectFromFile,
   openProject,
   saveProject,
+  saveProjectToFile,
   syncMenu,
 } from "../api";
 import type { AppView, Project, ProjectsState } from "../types";
@@ -45,6 +47,7 @@ export function useProjects() {
       if (!state) return;
       void syncMenu({
         projects: state.projects,
+        recentProjectIds: state.recentProjectIds,
         activeProjectId: state.lastProjectId,
         view,
         simpleMode: extras?.simpleMode,
@@ -97,6 +100,21 @@ export function useProjects() {
     [],
   );
 
+  const loadProjectFromFile = useCallback(async (filePath: string) => {
+    const result = await importProjectFromFile(filePath);
+    setState(result.state);
+    return result.project;
+  }, []);
+
+  const writeProjectToFile = useCallback(
+    async (id: string, filePath: string, partial?: Partial<Project>) => {
+      const result = await saveProjectToFile(id, filePath, partial);
+      setState(result.state);
+      return result.project;
+    },
+    [],
+  );
+
   return {
     state,
     loading,
@@ -108,6 +126,8 @@ export function useProjects() {
     newProject,
     switchProject,
     removeProject,
+    loadProjectFromFile,
+    writeProjectToFile,
     syncMenuState,
   };
 }

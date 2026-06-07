@@ -15,12 +15,11 @@ import {
   apiInstallToolchain,
   apiOpenProject,
   apiPickPathSystem,
+  apiPickSavePathSystem,
   apiSaveProject,
   apiSaveSettings,
   apiValidate,
   apiFixGitIgnoreCase,
-  apiGetHgAuthors,
-  apiImportAuthorsMap,
   apiResetGitTarget,
 } from "../backend.js";
 import { refreshResolvedTools } from "../deps/resolveTools.js";
@@ -108,6 +107,41 @@ app.delete("/api/projects/:id", async (req, res) => {
   }
 });
 
+app.post("/api/projects/import-file", async (req, res) => {
+  try {
+    const { apiImportProjectFromFile } = await import("./projects.js");
+    const filePath = String(req.body?.filePath ?? "").trim();
+    if (!filePath) {
+      res.status(400).json({ error: "filePath is required" });
+      return;
+    }
+    res.json(await apiImportProjectFromFile(filePath));
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+app.post("/api/projects/:id/save-file", async (req, res) => {
+  try {
+    const { apiSaveProjectToFile } = await import("./projects.js");
+    const filePath = String(req.body?.filePath ?? "").trim();
+    if (!filePath) {
+      res.status(400).json({ error: "filePath is required" });
+      return;
+    }
+    const partial = req.body?.partial;
+    res.json(
+      await apiSaveProjectToFile(
+        String(req.params.id),
+        filePath,
+        partial && typeof partial === "object" ? partial : undefined,
+      ),
+    );
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
 app.post("/api/pick-path", (req, res) => {
   const body = req.body ?? {};
   const kind = body.kind === "file" ? "file" : "directory";
@@ -116,6 +150,19 @@ app.post("/api/pick-path", (req, res) => {
       kind,
       title: body.title,
       defaultPath: body.defaultPath,
+      fileFilter: body.fileFilter,
+    }),
+  );
+});
+
+app.post("/api/pick-save-path", (req, res) => {
+  const body = req.body ?? {};
+  res.json(
+    apiPickSavePathSystem({
+      title: body.title,
+      defaultPath: body.defaultPath,
+      suggestedName: body.suggestedName,
+      fileFilter: body.fileFilter,
     }),
   );
 });
@@ -129,24 +176,6 @@ app.get("/api/pick-path", (req, res) => {
       defaultPath: String(req.query.defaultPath ?? "").trim() || undefined,
     }),
   );
-});
-
-app.get("/api/authors", async (req, res) => {
-  const hgRepo = String(req.query.hgRepo ?? "");
-  try {
-    res.json(await apiGetHgAuthors(hgRepo));
-  } catch (e) {
-    res.status(400).json({ error: String(e) });
-  }
-});
-
-app.get("/api/authors/import", async (req, res) => {
-  const filePath = String(req.query.filePath ?? "");
-  try {
-    res.json(await apiImportAuthorsMap(filePath));
-  } catch (e) {
-    res.status(400).json({ error: String(e) });
-  }
 });
 
 app.get("/api/snapshot", async (req, res) => {

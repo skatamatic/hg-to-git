@@ -2,16 +2,19 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { getResolvedTools } from "./deps/resolveTools.js";
-import { getGitTargetStatus } from "./gitTarget.js";
+import { ensureGitTargetInitialized, getGitTargetStatus } from "./gitTarget.js";
 import { getIgnoreCaseStatus } from "./prerequisites.js";
 import {
   buildHgToGitBranchMap,
+  expandHgBranchesForSnapshot,
   gitBranchForHg,
   hgBranchForGit,
   type HgToGitBranchMap,
 } from "./branchMapping.js";
 import type { SnapshotOptions } from "./snapshotOptions.js";
 import { analyzeRepoSync, type RepoSyncInfo } from "./repoSync.js";
+import { branchNameFromGitRef, tagNameFromGitRef } from "./gitRefs.js";
+import { listUnnamedHgHeadRevisions } from "./hgHeads.js";
 import {
   SNAPSHOT_PROGRESS,
   type SnapshotProgressReporter,
@@ -20,13 +23,18 @@ import {
 export type { RepoSyncInfo, SyncStatusKind, BranchDelta, PendingChangeset } from "./repoSync.js";
 export { analyzeRepoSync };
 
-const STATE_PREFIX = "hg2git";
+import {
+  countMappingEntries,
+  HG2GIT_STATE_PREFIX,
+  parseImportedTipFromState,
+} from "./conversionState.js";
+
+const STATE_PREFIX = HG2GIT_STATE_PREFIX;
 
 export interface BranchInfo {
   name: string;
   tip?: string;
   revision?: number;
-  commitCount?: number;
 }
 
 export interface ConversionState {
@@ -42,6 +50,8 @@ export interface RepoSnapshot {
     tipRevision?: number;
     tipNode?: string;
     branches: BranchInfo[];
+    /** Extra branch tips that hg-fast-export flags as unnamed heads. */
+    unnamedHeadRevisions?: number[];
   };
   git: {
     valid: boolean;
@@ -80,23 +90,25 @@ function readConversionState(gitRepo: string): ConversionState | null {
   if (!gd) return null;
   const statePath = path.join(gd, `${STATE_PREFIX}-state`);
   const mappingPath = path.join(gd, `${STATE_PREFIX}-mapping`);
-  if (!existsSync(statePath)) return null;
 
   let importedTip = 0;
   let hgRepo: string | undefined;
-  for (const line of readFileSync(statePath, "utf8").split(/\r?\n/)) {
-    const tip = line.match(/^:tip\s+(\d+)/);
-    if (tip) importedTip = parseInt(tip[1], 10);
-    const repo = line.match(/^:repo\s+(.+)$/);
-    if (repo) hgRepo = repo[1].trim();
+
+  if (existsSync(statePath)) {
+    const parsed = parseImportedTipFromState(readFileSync(statePath, "utf8"));
+    importedTip = parsed.tip;
+    hgRepo = parsed.hgRepo;
   }
 
   let mappingEntries = 0;
   if (existsSync(mappingPath)) {
-    mappingEntries = readFileSync(mappingPath, "utf8")
-      .split(/\r?\n/)
-      .filter((l) => l.startsWith(":")).length;
+    mappingEntries = countMappingEntries(readFileSync(mappingPath, "utf8"));
+    if (importedTip <= 0 && mappingEntries > 0) {
+      importedTip = mappingEntries;
+    }
   }
+
+  if (importedTip <= 0) return null;
 
   const marksPath = path.join(gd, `${STATE_PREFIX}-marks`);
   const hasMarks =
@@ -128,24 +140,70 @@ function readBranchLinks(
   return links;
 }
 
+export function listHgBranchNames(hgRepo: string): string[] {
+  return hgBranches(hgRepo).map((b) => b.name);
+}
+
+/** Every distinct `branch` field in changelog (includes closed / legacy names). */
+export function listHgBranchNamesFromHistory(hgRepo: string): string[] {
+  const out = runExe(getResolvedTools().hg, [
+    "-R",
+    hgRepo,
+    "log",
+    "-r",
+    "all()",
+    "-T",
+    "{branch}\n",
+    "-q",
+  ]);
+  if (!out) return [];
+  const names = new Set<string>();
+  for (const line of out.split(/\r?\n/)) {
+    const name = line.trim();
+    if (name) names.add(name);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+/** Names needed for hg-fast-export `-B` (active heads + any branch label in history). */
+export function listHgBranchNamesForMapping(
+  hgRepo: string,
+  options: { includeHistorical?: boolean } = {},
+): string[] {
+  const names = new Set<string>(listHgBranchNames(hgRepo));
+  if (options.includeHistorical !== false) {
+    for (const name of listHgBranchNamesFromHistory(hgRepo)) {
+      names.add(name);
+    }
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
 function hgBranches(hgRepo: string): BranchInfo[] {
-  // `hg branches` does not support `--style`; use default output:
-  //   default                        7:624c1c92dee4
-  const out = runExe(getResolvedTools().hg, ["-R", hgRepo, "branches"]);
+  const out = runExe(getResolvedTools().hg, [
+    "-R",
+    hgRepo,
+    "branches",
+    "-a",
+    "-T",
+    "{branch}\t{rev}\t{node|short}\n",
+  ]);
   if (!out) return [];
   const branches: BranchInfo[] = [];
   for (const line of out.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const m = trimmed.match(/^(\S+)\s+(\d+):([0-9a-f]+)/i);
-    if (m) {
-      const name = m[1];
-      branches.push({
-        name,
-        revision: parseInt(m[2], 10),
-        tip: m[3].slice(0, 12),
-      });
-    }
+    const parts = trimmed.split("\t");
+    if (parts.length < 3) continue;
+    const name = parts[0];
+    const rev = parseInt(parts[1], 10);
+    const node = parts[2];
+    if (!name || !Number.isFinite(rev)) continue;
+    branches.push({
+      name,
+      revision: rev,
+      tip: node.slice(0, 12),
+    });
   }
   return branches.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -156,12 +214,12 @@ function gitBranches(gitRepo: string): BranchInfo[] {
     gitRepo,
     "for-each-ref",
     "refs/heads/",
-    "--format=%(refname:short)\t%(objectname:short)\t%(committerdate:iso)",
+    "--format=%(refname)\t%(objectname:short)\t%(committerdate:iso)",
   ]);
   if (!out) return [];
   return out.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [name, tip] = line.split("\t");
-    return { name, tip };
+    const [ref, tip] = line.split("\t");
+    return { name: branchNameFromGitRef(ref ?? ""), tip };
   });
 }
 
@@ -171,9 +229,29 @@ function gitTags(gitRepo: string): string[] {
     gitRepo,
     "for-each-ref",
     "refs/tags/",
-    "--format=%(refname:short)",
+    "--format=%(refname)",
   ]);
-  return out ? out.split(/\r?\n/).filter(Boolean) : [];
+  return out
+    ? out.split(/\r?\n/).filter(Boolean).map((ref) => tagNameFromGitRef(ref))
+    : [];
+}
+
+export function listHgTagNames(hgRepo: string): string[] {
+  const out = runExe(getResolvedTools().hg, [
+    "-R",
+    hgRepo,
+    "tags",
+    "-T",
+    "{tag}\n",
+  ]);
+  if (!out) return [];
+  const names = new Set<string>();
+  for (const line of out.split(/\r?\n/)) {
+    const tag = line.trim();
+    if (!tag || tag === "tip") continue;
+    names.add(tag);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
 }
 
 export function getRepoSnapshot(
@@ -188,6 +266,10 @@ export function getRepoSnapshot(
 
   report(SNAPSHOT_PROGRESS.verifying);
   const hgValid = existsSync(path.join(hgRepo, ".hg"));
+  if (gitRepo.trim()) {
+    report(SNAPSHOT_PROGRESS.gitInit);
+    ensureGitTargetInitialized(gitRepo);
+  }
   const gitValid = existsSync(path.join(gitRepo, ".git"));
 
   let tipRevision: number | undefined;
@@ -210,15 +292,22 @@ export function getRepoSnapshot(
   }
 
   if (hgValid) report(SNAPSHOT_PROGRESS.hgBranches);
-  const hgBranchList = hgValid ? hgBranches(hgRepo) : [];
+  const activeHgBranches = hgValid ? hgBranches(hgRepo) : [];
+  const unnamedHeadRevisions = hgValid
+    ? listUnnamedHgHeadRevisions(hgRepo)
+    : undefined;
   const branchMap = buildHgToGitBranchMap({
     defaultBranch: options.defaultBranch,
     branchesMapPath: options.branchesMap,
-    hgBranchNames: hgBranchList.map((b) => b.name),
+    hgBranchNames: activeHgBranches.map((b) => b.name),
   });
 
   if (gitValid) report(SNAPSHOT_PROGRESS.gitBranches);
-  const gitBranchList = gitValid ? gitBranches(gitRepo) : [];
+  let gitBranchList = gitValid ? gitBranches(gitRepo) : [];
+  let hgBranchList = hgValid
+    ? expandHgBranchesForSnapshot(activeHgBranches, branchMap, gitBranchList)
+    : [];
+
   const gitTagList = gitValid ? gitTags(gitRepo) : [];
   if (gitValid) report(SNAPSHOT_PROGRESS.conversion);
   const conversion = gitValid ? readConversionState(gitRepo) : null;
@@ -233,6 +322,10 @@ export function getRepoSnapshot(
       tipRevision,
       tipNode,
       branches: hgBranchList,
+      unnamedHeadRevisions:
+        unnamedHeadRevisions && unnamedHeadRevisions.length > 0
+          ? unnamedHeadRevisions
+          : undefined,
     },
     git: {
       valid: gitValid,

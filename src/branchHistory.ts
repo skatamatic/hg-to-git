@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { getResolvedTools } from "./deps/resolveTools.js";
+import { branchNameFromGitRef } from "./gitRefs.js";
 
 export interface BranchCommit {
   revision?: number;
@@ -10,6 +11,8 @@ export interface BranchCommit {
   sha: string;
   author: string;
   message: string;
+  /** Author/commit date (ISO-style string from hg or git). */
+  date?: string;
   /** Tag names pointing at this commit (Hg and/or Git). */
   tags?: string[];
 }
@@ -22,8 +25,6 @@ export interface AlignedCommitPair {
 export interface BranchHistoryResult {
   hgBranch?: string;
   gitBranch?: string;
-  hgTotal: number;
-  gitTotal: number;
   pairs: AlignedCommitPair[];
   limit: number;
   offset: number;
@@ -113,21 +114,23 @@ export function hgBranchRevSpec(branch: string): string {
   return `reverse(branch('${safe}'))`;
 }
 
-/** Parse `hg log --template` lines: rev|node|short|author|message|tags */
+/** Parse `hg log --template` lines: rev|node|short|author|date|message|tags */
 export function parseHgLogOutput(out: string): BranchCommit[] {
   const items: BranchCommit[] = [];
   for (const line of out.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const [rev, node, sha, author, message, tagField] = line.split("|");
+    const [rev, node, sha, author, date, message, tagField] = line.split("|");
     const n = parseInt(rev ?? "", 10);
     if (Number.isNaN(n) || !sha) continue;
     const tags = parseCommitTagList(tagField);
+    const when = date?.trim();
     items.push({
       revision: n,
       node: node?.toLowerCase(),
       sha,
       author: author ?? "",
       message: message ?? "",
+      ...(when ? { date: when } : {}),
       ...(tags.length ? { tags } : {}),
     });
   }
@@ -142,12 +145,14 @@ function parseGitCommits(out: string): BranchCommit[] {
     const full = parts[0];
     const short = parts[1] ?? full?.slice(0, 12);
     const author = parts[2];
-    const message = parts[3];
+    const date = parts[3]?.trim();
+    const message = parts[4];
     if (!short) continue;
     items.push({
       sha: short,
       author: author ?? "",
       message: message ?? "",
+      ...(date ? { date } : {}),
     });
   }
   return items;
@@ -178,7 +183,7 @@ function listHgBranchCommitsPage(
     "-r",
     hgBranchRevSpec(branch),
     "--template",
-    "{rev}|{node}|{node|short}|{author|user}|{desc|firstline}|{join(tags, \",\")}\n",
+    "{rev}|{node}|{node|short}|{author|user}|{date|isodate}|{desc|firstline}|{join(tags, \",\")}\n",
     "-l",
     String(skip + fetchCount),
   ]);
@@ -187,13 +192,26 @@ function listHgBranchCommitsPage(
   return { commits: page, hasMore: all.length > skip + limit };
 }
 
-function listGitHeads(gitRepo: string): string[] {
+/** Count changesets per Mercurial branch label from `hg log -r all()` output. */
+export function tallyHgBranchLabels(logOutput: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const line of logOutput.split(/\r?\n/)) {
+    const name = line.trim();
+    if (!name) continue;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return counts;
+}
+
+export function listGitHeads(gitRepo: string): string[] {
   const out = runGit(gitRepo, [
     "for-each-ref",
     "refs/heads/",
-    "--format=%(refname:short)",
+    "--format=%(refname)",
   ]);
-  return out ? out.split(/\r?\n/).filter(Boolean) : [];
+  return out
+    ? out.split(/\r?\n/).filter(Boolean).map((ref) => branchNameFromGitRef(ref))
+    : [];
 }
 
 /** Refs to exclude so `git log` shows branch-tip commits, not full ancestry. */
@@ -243,7 +261,7 @@ function listGitBranchCommitsPage(
     "--reverse",
     `-n`,
     String(skip + fetchCount),
-    "--format=%H%x1f%h%x1f%an%x1f%s",
+    "--format=%H%x1f%h%x1f%an%x1f%ai%x1f%s",
   ];
   for (const ref of excludeRefs) {
     if (ref && ref !== branch) args.push("--not", ref);
@@ -260,10 +278,12 @@ function listGitBranchCommitsPage(
     const short = parts[1] ?? full?.slice(0, 12);
     if (!short) continue;
     fullShas.push(full?.toLowerCase() ?? short);
+    const date = parts[3]?.trim();
     page.push({
       sha: short,
       author: parts[2] ?? "",
-      message: parts[3] ?? "",
+      message: parts[4] ?? "",
+      ...(date ? { date } : {}),
     });
   }
   enrichGitCommitsWithTags(gitRepo, page, fullShas);
@@ -283,6 +303,7 @@ function gitCommitsFromHgPage(
       sha: full.slice(0, 12),
       author: h.author,
       message: h.message,
+      ...(h.date ? { date: h.date } : {}),
     });
   }
   return out;
@@ -302,6 +323,7 @@ function pairsFromHgCommits(
           sha: full.slice(0, 12),
           author: h.author,
           message: h.message,
+          ...(h.date ? { date: h.date } : {}),
           ...(gitTags.length ? { tags: gitTags } : {}),
         }
       : null;
@@ -485,18 +507,9 @@ export function getBranchHistory(
     pairs = [];
   }
 
-  const hgTotal =
-    offset + hgPage.commits.length + (hgPage.hasMore ? 1 : 0);
-  const gitOnlyCount = pairs.filter((p) => p.git).length;
-  const gitTotal = hgBranch
-    ? hgTotal
-    : offset + gitOnlyCount + (hasMoreGit ? 1 : 0);
-
   return {
     hgBranch,
     gitBranch,
-    hgTotal,
-    gitTotal,
     pairs,
     limit,
     offset,

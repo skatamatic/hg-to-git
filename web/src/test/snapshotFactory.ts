@@ -12,8 +12,8 @@ export function makeRepoSnapshot(
       tipRevision: 5,
       tipNode: "abc123",
       branches: [
-        { name: "default", revision: 5, tip: "abc123", commitCount: 6 },
-        { name: "feature-alpha", revision: 3, tip: "def456", commitCount: 2 },
+        { name: "default", revision: 5, tip: "abc123" },
+        { name: "feature-alpha", revision: 3, tip: "def456" },
       ],
       ...overrides.hg,
     },

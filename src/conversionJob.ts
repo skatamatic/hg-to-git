@@ -1,4 +1,6 @@
 import { prepareAuthorsMapForConvert } from "./authorsMap.js";
+import { ensureBranchesMapForConvert } from "./branchesMap.js";
+import { ensureTagsMapForConvert } from "./tagsMap.js";
 import { loadConfig, type HgToGitConfig } from "./config.js";
 import { convertHgToGit } from "./fastExport.js";
 import { parseOutputLine } from "./outputParser.js";
@@ -20,14 +22,31 @@ export async function runConversionJob(
   const gitRepo = String(body.gitRepo ?? "");
   const authorsMap = await prepareAuthorsMapForConvert({
     gitRepo,
-    authorMappings: body.authorMappings as
-      | import("./authorsMap.js").AuthorMappingEntry[]
-      | undefined,
+    hgRepo: String(body.hgRepo ?? ""),
     authorsMap: body.authorsMap as string | undefined,
+  });
+  const branchesMap = await ensureBranchesMapForConvert({
+    gitRepo,
+    hgRepo: String(body.hgRepo ?? ""),
+    defaultBranch:
+      typeof body.defaultBranch === "string" ? body.defaultBranch : undefined,
+    branchesMap: body.branchesMap as string | undefined,
+  });
+  const tagsMap = await ensureTagsMapForConvert({
+    gitRepo,
+    hgRepo: String(body.hgRepo ?? ""),
+    tagsMap: body.tagsMap as string | undefined,
   });
   const config = await loadConfig(undefined, {
     ...body,
-    ...(authorsMap ? { authorsMap } : {}),
+    authorsMap,
+    ...(branchesMap ? { branchesMap } : {}),
+    ...(tagsMap ? { tagsMap } : {}),
+    ...(branchesMap || tagsMap ? { sanitizeNames: false } : {}),
+    ignoreUnnamedHeads:
+      typeof body.ignoreUnnamedHeads === "boolean"
+        ? body.ignoreUnnamedHeads
+        : true,
   });
   checkIgnoreCase(config.gitRepo, config.force);
   checkGitTarget(config.gitRepo, config.force);

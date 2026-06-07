@@ -4,7 +4,28 @@ import { aggregateProgress, parseOutputLine } from "./outputParser.js";
 describe("parseOutputLine", () => {
   it("classifies errors and warnings", () => {
     expect(parseOutputLine("error: boom").level).toBe("error");
+    expect(
+      parseOutputLine("Error: repository has an unnamed head: hg r5015").level,
+    ).toBe("warn");
+    expect(
+      parseOutputLine(
+        "fatal: Branch name doesn't conform to GIT standards: refs/heads/foo bar",
+      ).level,
+    ).toBe("error");
     expect(parseOutputLine("warning: sanitized name").level).toBe("warn");
+    expect(
+      parseOutputLine("Warning: sanitized branch [a b] to [a_b]").level,
+    ).toBe("info");
+  });
+
+  it("parses simple delta revision progress", () => {
+    const r = parseOutputLine(
+      "For Sprint 2016 - 5: Exporting simple delta revision 1876/1941 with 0/0 modified/removed files",
+    );
+    expect(r.level).toBe("progress");
+    expect(r.revisionCurrent).toBe(1876);
+    expect(r.revisionMax).toBe(1941);
+    expect(r.branch).toBe("For Sprint 2016 - 5");
   });
 
   it("parses revision progress with branch", () => {

@@ -94,7 +94,6 @@ export function BranchMap({
   const [historyByRow, setHistoryByRow] = useState<Record<string, BranchHistoryResult>>({});
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [loadMoreId, setLoadMoreId] = useState<string | null>(null);
-
   const loadHistory = useCallback(
     async (row: AlignedBranchRow, offset: number, append: boolean) => {
       if (!hgPath || !gitPath) return;
@@ -230,25 +229,10 @@ export function BranchMap({
             <div className="py-0.5">
               {alignedRows.map((row) => {
                 const hist = historyByRow[row.id];
-                const rowWithCounts = {
-                  ...row,
-                  hg: row.hg
-                    ? {
-                        ...row.hg,
-                        commitCount: hist?.hgTotal ?? row.hg.commitCount,
-                      }
-                    : null,
-                  git: row.git
-                    ? {
-                        ...row.git,
-                        commitCount: hist?.gitTotal ?? row.git.commitCount,
-                      }
-                    : null,
-                };
                 return (
                   <BranchAlignedRow
                     key={row.id}
-                    row={rowWithCounts}
+                    row={row}
                     compact={dense}
                     expandable={expandable}
                     expanded={expandable && expandedId === row.id}

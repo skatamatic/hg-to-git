@@ -5,12 +5,17 @@ import {
   Menu,
   type MenuItemConstructorOptions,
 } from "electron";
-import type { Project } from "../server/projects.js";
+import {
+  getRecentProjects,
+  type Project,
+} from "../server/projects.js";
 
 export type AppCommand =
   | "file:new-project"
   | "file:open-project"
+  | "file:load-project"
   | "file:save-project"
+  | "file:save-project-as"
   | "file:exit"
   | "view:setup"
   | "view:results"
@@ -23,6 +28,7 @@ export type AppCommand =
 
 export interface MenuSyncState {
   projects: Project[];
+  recentProjectIds?: string[];
   activeProjectId: string | null;
   simpleMode?: boolean;
   projectConfigured?: boolean;
@@ -34,17 +40,30 @@ function sendCommand(win: BrowserWindow | null, command: AppCommand, payload?: u
   target?.webContents.send("app:command", { command, payload });
 }
 
-function sortedProjects(projects: Project[]): Project[] {
-  return [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
 export function buildAppMenu(
   win: BrowserWindow | null,
   state: MenuSyncState,
 ): Menu {
   const isMac = process.platform === "darwin";
-  const projectList = sortedProjects(state.projects);
+  const recentProjects = getRecentProjects({
+    version: 1,
+    lastProjectId: state.activeProjectId,
+    projects: state.projects,
+    recentProjectIds: state.recentProjectIds,
+  });
   const restricted = Boolean(state.menuRestricted);
+
+  const recentSubmenu: MenuItemConstructorOptions[] =
+    recentProjects.length === 0
+      ? [{ label: "No recent projects", enabled: false }]
+      : recentProjects.map((p) => ({
+          label: p.name,
+          type: "radio" as const,
+          checked: p.id === state.activeProjectId,
+          enabled: !restricted,
+          click: () =>
+            sendCommand(win, "file:open-project", { projectId: p.id }),
+        }));
 
   const fileSubmenu: MenuItemConstructorOptions[] = [
     {
@@ -53,22 +72,28 @@ export function buildAppMenu(
       enabled: !restricted,
       click: () => sendCommand(win, "file:new-project"),
     },
-    ...(projectList.length === 0
-      ? [{ label: "No projects", enabled: false }]
-      : projectList.map((p) => ({
-          label: p.name,
-          type: "radio" as const,
-          checked: p.id === state.activeProjectId,
-          enabled: !restricted,
-          click: () =>
-            sendCommand(win, "file:open-project", { projectId: p.id }),
-        }))),
+    { type: "separator" },
+    {
+      label: "Recent",
+      submenu: recentSubmenu,
+      enabled: !restricted,
+    },
+    {
+      label: "Load Project…",
+      enabled: !restricted,
+      click: () => sendCommand(win, "file:load-project"),
+    },
     { type: "separator" },
     {
       label: "Save Project",
       accelerator: "CmdOrCtrl+S",
-      enabled: !restricted,
+      enabled: !restricted && Boolean(state.activeProjectId),
       click: () => sendCommand(win, "file:save-project"),
+    },
+    {
+      label: "Save Project As…",
+      enabled: !restricted && Boolean(state.activeProjectId),
+      click: () => sendCommand(win, "file:save-project-as"),
     },
     { type: "separator" },
     {

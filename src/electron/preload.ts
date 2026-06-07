@@ -23,6 +23,12 @@ const bridge = {
 
   deleteProject: (id: string) => ipcRenderer.invoke("projects:delete", id),
 
+  importProjectFile: (filePath: string) =>
+    ipcRenderer.invoke("projects:import-file", filePath),
+
+  saveProjectFile: (id: string, filePath: string, partial?: unknown) =>
+    ipcRenderer.invoke("projects:save-file", { id, filePath, partial }),
+
   syncMenu: (state: unknown) => ipcRenderer.invoke("menu:sync", state),
 
   checkToolchain: () => ipcRenderer.invoke("deps:check"),
@@ -71,12 +77,6 @@ const bridge = {
       ...query,
     }),
 
-  scanHgAuthors: (hgRepo: string) =>
-    ipcRenderer.invoke("authors:scan", { hgRepo }),
-
-  importAuthorsMap: (filePath: string) =>
-    ipcRenderer.invoke("authors:import", { filePath }),
-
   validate: (body: unknown) => ipcRenderer.invoke("validate", body),
 
   fixGitIgnoreCase: (gitRepo: string) =>
@@ -93,7 +93,16 @@ const bridge = {
 
     defaultPath?: string;
 
+    fileFilter?: "project" | "all";
+
   }) => ipcRenderer.invoke("pick-path", options),
+
+  pickSavePath: (options: {
+    title?: string;
+    defaultPath?: string;
+    suggestedName?: string;
+    fileFilter?: "project" | "all";
+  }) => ipcRenderer.invoke("pick-save-path", options),
 
   convert: (
 

@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { refreshResolvedTools, getResolvedTools, requireGit } from "./deps/resolveTools.js";
-
-const STATE_PREFIX = "hg2git";
+import {
+  hasResumableConversion,
+  recoverConversionArtifactsFromBackup,
+} from "./conversionState.js";
+import { getResolvedTools, requireGit } from "./deps/resolveTools.js";
+import { branchNameFromGitRef } from "./gitRefs.js";
 
 export interface GitTargetStatus {
   /** True when the repo has no commits yet (ideal for first import). */
@@ -12,6 +15,32 @@ export interface GitTargetStatus {
   foreignBranches: string[];
   problematic: boolean;
   message?: string;
+}
+
+function initGitRepository(gitRepo: string): void {
+  mkdirSync(gitRepo, { recursive: true });
+  const git = getResolvedTools().git ?? requireGit();
+  const init = spawnSync(git, ["init"], {
+    cwd: gitRepo,
+    encoding: "utf8",
+    windowsHide: true,
+    env: process.env,
+  });
+  if (init.status !== 0) {
+    throw new Error(
+      `git init failed: ${((init.stderr ?? "") + (init.stdout ?? "")).trim()}`,
+    );
+  }
+  runGit(gitRepo, ["config", "core.ignoreCase", "false"]);
+}
+
+/** Create `.git` in the target folder when a path is set but not initialized yet. */
+export function ensureGitTargetInitialized(gitRepo: string): boolean {
+  const trimmed = gitRepo?.trim();
+  if (!trimmed) return false;
+  if (existsSync(path.join(trimmed, ".git"))) return false;
+  initGitRepository(trimmed);
+  return true;
 }
 
 function runGit(gitRepo: string, args: string[]): { ok: boolean; out: string } {
@@ -32,20 +61,17 @@ function gitDir(gitRepo: string): string | null {
   return path.isAbsolute(rel) ? rel : path.join(gitRepo, rel);
 }
 
-function hasConversionState(gitRepo: string): boolean {
-  const gd = gitDir(gitRepo);
-  if (!gd) return false;
-  return existsSync(path.join(gd, `${STATE_PREFIX}-state`));
-}
-
 function listBranches(gitRepo: string): string[] {
   const r = runGit(gitRepo, [
     "for-each-ref",
-    "--format=%(refname:short)",
+    "--format=%(refname)",
     "refs/heads/",
   ]);
   if (!r.ok || !r.out) return [];
-  return r.out.split(/\r?\n/).filter(Boolean);
+  return r.out
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((ref) => branchNameFromGitRef(ref));
 }
 
 export function gitTargetMessage(
@@ -55,7 +81,7 @@ export function gitTargetMessage(
   const list = branches.length ? branches.join(", ") : "existing commits";
   return (
     `The Git target at ${gitRepo} already has branch(es) [${list}] that were not created by hg-fast-export. ` +
-    "Use an empty Git repository (git init only, no commits) for the first import, or reset the target."
+    "Use an empty Git repository (git init only, no commits) for the first import, point at a Git repo that already has `.git/hg2git-*` conversion state for incremental sync, or reset the target."
   );
 }
 
@@ -79,7 +105,9 @@ export function getGitTargetStatus(gitRepo: string): GitTargetStatus {
     };
   }
 
-  const converted = hasConversionState(gitRepo);
+  const gd = gitDir(gitRepo);
+  if (gd) recoverConversionArtifactsFromBackup(gd);
+  const converted = gd ? hasResumableConversion(gd) : false;
   if (converted) {
     return {
       empty: false,
@@ -111,21 +139,7 @@ export function resetGitTargetEmpty(gitRepo: string): GitTargetStatus {
   if (existsSync(gitDir)) {
     rmSync(gitDir, { recursive: true, force: true });
   }
-  mkdirSync(gitRepo, { recursive: true });
-  refreshResolvedTools();
-  const git = requireGit();
-  const init = spawnSync(git, ["init"], {
-    cwd: gitRepo,
-    encoding: "utf8",
-    windowsHide: true,
-    env: process.env,
-  });
-  if (init.status !== 0) {
-    throw new Error(
-      `git init failed: ${((init.stderr ?? "") + (init.stdout ?? "")).trim()}`,
-    );
-  }
-  runGit(gitRepo, ["config", "core.ignoreCase", "false"]);
+  initGitRepository(gitRepo);
   return getGitTargetStatus(gitRepo);
 }
 

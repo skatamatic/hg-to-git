@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type PickKind = "directory" | "file";
+export type PickKind = "directory" | "file" | "save-file";
 
 export interface PickResult {
   path: string | null;
@@ -33,7 +33,12 @@ function resolveElectronExecutable(): string | null {
 /** Native modal picker via a short-lived Electron process (Windows dev:ui). */
 function pickViaElectron(
   kind: PickKind,
-  options: { title?: string; defaultPath?: string },
+  options: {
+    title?: string;
+    defaultPath?: string;
+    suggestedName?: string;
+    fileFilter?: "project" | "all";
+  },
 ): PickResult {
   const electron = resolveElectronExecutable();
   const cliScript = path.resolve(__dirname, "../electron/pickDialogCli.js");
@@ -45,6 +50,8 @@ function pickViaElectron(
     kind,
     title: options.title,
     defaultPath: options.defaultPath,
+    suggestedName: options.suggestedName,
+    fileFilter: options.fileFilter,
   };
 
   const outFile = path.join(mkdtempSync(path.join(tmpdir(), "hg-pick-")), "result.json");
@@ -95,27 +102,62 @@ function pickViaElectron(
 
 export function pickPath(
   kind: PickKind,
-  options: { title?: string; defaultPath?: string } = {},
+  options: {
+    title?: string;
+    defaultPath?: string;
+    suggestedName?: string;
+    fileFilter?: "project" | "all";
+  } = {},
 ): PickResult {
   const title =
-    options.title ?? (kind === "directory" ? "Select folder" : "Select file");
+    options.title ??
+    (kind === "directory"
+      ? "Select folder"
+      : kind === "save-file"
+        ? "Save file"
+        : "Select file");
   const defaultPath = options.defaultPath?.trim();
 
   try {
     if (process.platform === "win32") {
-      const viaElectron = pickViaElectron(kind, { title, defaultPath });
+      const viaElectron = pickViaElectron(kind, {
+        title,
+        defaultPath,
+        suggestedName: options.suggestedName,
+        fileFilter: options.fileFilter,
+      });
       if (!viaElectron.error) return viaElectron;
-      return kind === "directory"
-        ? pickWindowsFolderFallback(title, defaultPath)
-        : pickWindowsFileFallback(title, defaultPath);
+      if (kind === "directory") {
+        return pickWindowsFolderFallback(title, defaultPath);
+      }
+      if (kind === "save-file") {
+        return pickWindowsSaveFileFallback(
+          title,
+          defaultPath,
+          options.suggestedName,
+          options.fileFilter,
+        );
+      }
+      return pickWindowsFileFallback(title, defaultPath, options.fileFilter);
     }
     if (process.platform === "darwin") {
-      return { path: pickMac(kind, title, defaultPath) };
+      return { path: pickMac(kind, title, defaultPath, options.suggestedName) };
     }
     return { path: pickLinux(kind, title, defaultPath) };
   } catch (e) {
     return { path: null, error: String(e) };
   }
+}
+
+export function pickSavePath(
+  options: {
+    title?: string;
+    defaultPath?: string;
+    suggestedName?: string;
+    fileFilter?: "project" | "all";
+  } = {},
+): PickResult {
+  return pickPath("save-file", options);
 }
 
 /** WinForms modal loop — fallback when Electron helper is unavailable. */
@@ -163,20 +205,64 @@ function pickWindowsFolderFallback(title: string, defaultPath?: string): PickRes
   return runPs1ScriptWithResult(psModalPickScript(body, resultPath), resultPath);
 }
 
-function pickWindowsFileFallback(title: string, defaultPath?: string): PickResult {
+function windowsFileFilter(fileFilter?: "project" | "all"): string {
+  if (fileFilter === "project") {
+    return "hg-to-git projects (*.hg-to-git-project.json)|*.hg-to-git-project.json|JSON files (*.json)|*.json|All files (*.*)|*.*";
+  }
+  return "All files (*.*)|*.*";
+}
+
+function pickWindowsFileFallback(
+  title: string,
+  defaultPath?: string,
+  fileFilter?: "project" | "all",
+): PickResult {
   const dir =
     defaultPath && existsSync(defaultPath)
       ? existsSync(path.dirname(defaultPath))
         ? path.dirname(defaultPath)
         : defaultPath
-      : "";
+      : defaultPath && existsSync(path.dirname(defaultPath))
+        ? path.dirname(defaultPath)
+        : "";
   const resultPath = path.join(mkdtempSync(path.join(tmpdir(), "hg-pick-")), "result.txt");
   const escapedResult = resultPath.replace(/'/g, "''");
+  const filter = windowsFileFilter(fileFilter).replace(/'/g, "''");
   const body = `
   $d = New-Object System.Windows.Forms.OpenFileDialog
   $d.Title = '${title.replace(/'/g, "''")}'
-  $d.Filter = 'All files (*.*)|*.*|Author maps (*.map)|*.map'
+  $d.Filter = '${filter}'
   ${dir ? `$d.InitialDirectory = '${dir.replace(/'/g, "''")}'` : ""}
+  if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+    [IO.File]::WriteAllText('${escapedResult}', $d.FileName)
+  }
+`;
+  return runPs1ScriptWithResult(psModalPickScript(body, resultPath), resultPath);
+}
+
+function pickWindowsSaveFileFallback(
+  title: string,
+  defaultPath?: string,
+  suggestedName?: string,
+  fileFilter?: "project" | "all",
+): PickResult {
+  const dir =
+    defaultPath && existsSync(path.dirname(defaultPath))
+      ? path.dirname(defaultPath)
+      : defaultPath && existsSync(defaultPath)
+        ? defaultPath
+        : "";
+  const resultPath = path.join(mkdtempSync(path.join(tmpdir(), "hg-pick-")), "result.txt");
+  const escapedResult = resultPath.replace(/'/g, "''");
+  const filter = windowsFileFilter(fileFilter).replace(/'/g, "''");
+  const fileName = suggestedName?.replace(/'/g, "''") ?? "";
+  const body = `
+  $d = New-Object System.Windows.Forms.SaveFileDialog
+  $d.Title = '${title.replace(/'/g, "''")}'
+  $d.Filter = '${filter}'
+  $d.OverwritePrompt = $true
+  ${dir ? `$d.InitialDirectory = '${dir.replace(/'/g, "''")}'` : ""}
+  ${fileName ? `$d.FileName = '${fileName}'` : ""}
   if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
     [IO.File]::WriteAllText('${escapedResult}', $d.FileName)
   }
@@ -219,6 +305,7 @@ function pickMac(
   kind: PickKind,
   title: string,
   defaultPath?: string,
+  suggestedName?: string,
 ): string | null {
   const escaped = title.replace(/"/g, '\\"');
   let script: string;
@@ -226,6 +313,19 @@ function pickMac(
     script = `POSIX path of (choose folder with prompt "${escaped}"`;
     if (defaultPath && existsSync(defaultPath)) {
       script += ` default location POSIX file "${defaultPath.replace(/"/g, '\\"')}"`;
+    }
+    script += ")";
+  } else if (kind === "save-file") {
+    script = `POSIX path of (choose file name with prompt "${escaped}"`;
+    if (defaultPath) {
+      const target = existsSync(path.dirname(defaultPath))
+        ? defaultPath
+        : suggestedName
+          ? path.join(defaultPath, suggestedName)
+          : defaultPath;
+      if (existsSync(path.dirname(target))) {
+        script += ` default location POSIX file "${target.replace(/"/g, '\\"')}"`;
+      }
     }
     script += ")";
   } else {

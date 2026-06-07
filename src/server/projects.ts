@@ -2,24 +2,26 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import {
+  parseProjectFile,
+  serializeProjectFile,
+} from "../projectFile.js";
 import { loadUiSettings, type UiSettings } from "./persist.js";
+import {
+  applyRecent,
+  ensureRecentPopulated,
+  getRecentProjects,
+  MAX_RECENT_PROJECTS,
+  pruneRecentProjectIds,
+} from "../projectRecent.js";
 
-export interface AuthorMappingEntry {
-  hgAuthor: string;
-  gitName?: string;
-  gitEmail?: string;
-  gitIdentity?: string;
-}
+export { getRecentProjects, MAX_RECENT_PROJECTS };
 
 export interface Project {
   id: string;
   name: string;
   hgRepo: string;
   gitRepo: string;
-  /** Legacy path to an external authors.map file. */
-  authorsMap?: string;
-  /** In-app author mappings (written to .hg-to-git/authors.map on convert). */
-  authorMappings?: AuthorMappingEntry[];
   defaultBranch?: string;
   checkoutWorkingTree?: boolean;
   simpleMode?: boolean;
@@ -27,6 +29,8 @@ export interface Project {
   checkoutBranch?: string;
   lastRunAt?: string;
   lastRunStatus?: "success" | "error" | "idle";
+  /** Last path used for Save / Load project file on disk. */
+  projectFile?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -35,6 +39,7 @@ export interface ProjectsState {
   version: 1;
   lastProjectId: string | null;
   projects: Project[];
+  recentProjectIds?: string[];
 }
 
 function stateDir(): string {
@@ -50,7 +55,12 @@ function projectsPath(): string {
   return path.join(stateDir(), "projects.json");
 }
 
-const EMPTY: ProjectsState = { version: 1, lastProjectId: null, projects: [] };
+const EMPTY: ProjectsState = {
+  version: 1,
+  lastProjectId: null,
+  projects: [],
+  recentProjectIds: [],
+};
 
 function now() {
   return new Date().toISOString();
@@ -83,7 +93,6 @@ async function migrateFromLegacySettings(
     name: projectName(legacy.hgRepo, legacy.gitRepo),
     hgRepo: legacy.hgRepo,
     gitRepo: legacy.gitRepo,
-    authorsMap: legacy.authorsMap,
     defaultBranch: legacy.defaultBranch ?? "master",
     checkoutWorkingTree: legacy.checkoutWorkingTree ?? true,
     lastRunAt: legacy.lastRunAt,
@@ -95,6 +104,7 @@ async function migrateFromLegacySettings(
     version: 1,
     lastProjectId: project.id,
     projects: [project],
+    recentProjectIds: [],
   };
 }
 
@@ -110,6 +120,9 @@ export async function loadProjectsState(): Promise<ProjectsState> {
           version: 1,
           lastProjectId: parsed.lastProjectId ?? null,
           projects: parsed.projects.map(normalizeProject),
+          recentProjectIds: Array.isArray(parsed.recentProjectIds)
+            ? parsed.recentProjectIds
+            : [],
         };
       }
     } catch {
@@ -117,10 +130,14 @@ export async function loadProjectsState(): Promise<ProjectsState> {
     }
   }
   const migrated = await migrateFromLegacySettings(state);
-  if (migrated.projects.length !== state.projects.length) {
-    await writeProjectsState(migrated);
+  const populated = ensureRecentPopulated(migrated);
+  if (
+    migrated.projects.length !== state.projects.length ||
+    populated.recentProjectIds?.length !== migrated.recentProjectIds?.length
+  ) {
+    await writeProjectsState(populated);
   }
-  return migrated;
+  return populated;
 }
 
 async function writeProjectsState(state: ProjectsState): Promise<void> {
@@ -159,6 +176,7 @@ export async function apiCreateProject(input?: {
     version: 1,
     lastProjectId: project.id,
     projects: [project, ...state.projects],
+    recentProjectIds: state.recentProjectIds,
   };
   await writeProjectsState(next);
   return { state: next, project };
@@ -168,7 +186,7 @@ export async function apiOpenProject(id: string): Promise<ProjectsState> {
   const state = await loadProjectsState();
   const project = state.projects.find((p) => p.id === id);
   if (!project) throw new Error("Project not found");
-  const next = { ...state, lastProjectId: id };
+  const next = applyRecent({ ...state, lastProjectId: id }, id);
   await writeProjectsState(next);
   return next;
 }
@@ -203,6 +221,7 @@ export async function apiSaveProject(
     version: 1,
     lastProjectId: state.lastProjectId ?? id,
     projects,
+    recentProjectIds: state.recentProjectIds,
   };
   await writeProjectsState(next);
   return { state: next, project: updated };
@@ -215,9 +234,104 @@ export async function apiDeleteProject(id: string): Promise<ProjectsState> {
   if (lastProjectId === id) {
     lastProjectId = projects[0]?.id ?? null;
   }
-  const next: ProjectsState = { version: 1, lastProjectId, projects };
+  const recentProjectIds = (state.recentProjectIds ?? []).filter(
+    (recentId) => recentId !== id,
+  );
+  const next: ProjectsState = {
+    version: 1,
+    lastProjectId,
+    projects,
+    recentProjectIds,
+  };
   await writeProjectsState(next);
   return next;
+}
+
+export async function apiImportProjectFromFile(
+  filePath: string,
+): Promise<{ state: ProjectsState; project: Project }> {
+  const normalizedPath = path.resolve(filePath.trim());
+  if (!existsSync(normalizedPath)) {
+    throw new Error("Project file not found");
+  }
+
+  const raw = await readFile(normalizedPath, "utf8");
+  const data = parseProjectFile(raw);
+  const state = await loadProjectsState();
+  const t = now();
+
+  const existing = state.projects.find((p) => p.projectFile === normalizedPath);
+  if (existing) {
+    const updated = normalizeProject({
+      ...existing,
+      ...data,
+      projectFile: normalizedPath,
+      updatedAt: t,
+    });
+    const projects = state.projects.map((p) =>
+      p.id === existing.id ? updated : p,
+    );
+    const next = applyRecent(
+      {
+        version: 1,
+        lastProjectId: existing.id,
+        projects,
+        recentProjectIds: state.recentProjectIds,
+      },
+      existing.id,
+    );
+    await writeProjectsState(next);
+    await syncLegacySettingsFromProject(updated);
+    return { state: next, project: updated };
+  }
+
+  const project = normalizeProject({
+    id: randomUUID(),
+    ...data,
+    projectFile: normalizedPath,
+    createdAt: t,
+    updatedAt: t,
+  });
+  const next = applyRecent(
+    {
+      version: 1,
+      lastProjectId: project.id,
+      projects: [project, ...state.projects],
+      recentProjectIds: state.recentProjectIds,
+    },
+    project.id,
+  );
+  await writeProjectsState(next);
+  await syncLegacySettingsFromProject(project);
+  return { state: next, project };
+}
+
+export async function apiSaveProjectToFile(
+  id: string,
+  filePath: string,
+  partial?: Partial<Project>,
+): Promise<{ state: ProjectsState; project: Project }> {
+  const saved = partial
+    ? await apiSaveProject(id, partial)
+    : await (async () => {
+        const state = await loadProjectsState();
+        const project = state.projects.find((p) => p.id === id);
+        if (!project) throw new Error("Project not found");
+        return { state, project };
+      })();
+
+  const normalizedPath = path.resolve(filePath.trim());
+  await mkdir(path.dirname(normalizedPath), { recursive: true });
+  await writeFile(
+    normalizedPath,
+    serializeProjectFile(saved.project),
+    "utf8",
+  );
+
+  const withPath = await apiSaveProject(id, { projectFile: normalizedPath });
+  const next = applyRecent(withPath.state, id);
+  await writeProjectsState(next);
+  return { state: next, project: withPath.project };
 }
 
 /** Sync legacy ui-settings.json for older code paths. */
@@ -228,7 +342,6 @@ export async function syncLegacySettingsFromProject(
   return saveUiSettings({
     hgRepo: project.hgRepo,
     gitRepo: project.gitRepo,
-    authorsMap: project.authorsMap,
     defaultBranch: project.defaultBranch,
     checkoutWorkingTree: project.checkoutWorkingTree,
     simpleMode: project.simpleMode,
@@ -261,6 +374,7 @@ export async function apiUpdateActiveProjectRun(
     version: 1,
     lastProjectId: id,
     projects,
+    recentProjectIds: state.recentProjectIds,
   });
   await syncLegacySettingsFromProject(updated);
 }

@@ -14,7 +14,7 @@ export interface ParsedLogLine {
 }
 
 const REV_PROGRESS =
-  /Exporting .+ revision (\d+)\/(\d+) with (\d+)\/(\d+)/i;
+  /Exporting .+ revision (\d+)\/(\d+) with (\d+)\/(\d+)(?: modified\/removed files)?/i;
 const FILES_PROGRESS = /Exported (\d+)\/(\d+) files/i;
 const BRANCH_EXPORT = /^([^:]+): Exporting/i;
 
@@ -25,8 +25,12 @@ export function parseOutputLine(raw: string): ParsedLogLine {
   }
 
   let level: LogLevel = "info";
-  if (/^error:/i.test(message) || /^fatal:/i.test(message)) {
+  if (/repository has an unnamed head/i.test(message)) {
+    level = "warn";
+  } else if (/^fatal:/i.test(message) || /^error:/i.test(message)) {
     level = "error";
+  } else if (/^Warning: sanitized (branch|tag)/i.test(message)) {
+    level = "info";
   } else if (/^warning:/i.test(message) || /sanitized/i.test(message)) {
     level = "warn";
   } else if (

@@ -2,11 +2,13 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useInWindowMenuBar } from "../api";
 import type { Project } from "../types";
+import { getRecentProjects } from "../lib/recentProjects";
 import { UI_COPY } from "../lib/uiCopy";
 import { cn } from "../lib/utils";
 
 interface Props {
   projects: Project[];
+  recentProjectIds?: string[];
   activeProjectId: string | null;
   simpleMode?: boolean;
   projectConfigured?: boolean;
@@ -19,16 +21,19 @@ interface Props {
 
 function MenuDropdown({
   label,
-  open,
-  onOpenChange,
+  menuKey,
+  openMenu,
+  onOpenMenu,
   children,
 }: {
   label: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  menuKey: string;
+  openMenu: string | null;
+  onOpenMenu: (key: string | null) => void;
   children: ReactNode;
 }) {
   const menuId = useId();
+  const open = openMenu === menuKey;
 
   return (
     <div className="relative">
@@ -37,7 +42,10 @@ function MenuDropdown({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
-        onClick={() => onOpenChange(!open)}
+        onClick={() => onOpenMenu(open ? null : menuKey)}
+        onMouseEnter={() => {
+          if (openMenu !== null) onOpenMenu(menuKey);
+        }}
         className={cn(
           "rounded px-2.5 py-1 text-foreground/90 hover:bg-muted",
           open && "bg-muted text-foreground",
@@ -91,8 +99,46 @@ function Separator() {
   return <div role="separator" className="my-1 h-px bg-border/60" />;
 }
 
+function SubMenuItem({
+  label,
+  disabled,
+  children,
+}: {
+  label: string;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => !disabled && setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        disabled={disabled}
+        className="flex w-full items-center justify-between gap-6 px-3 py-1.5 text-left hover:bg-muted disabled:opacity-40"
+      >
+        <span>{label}</span>
+        <span className="text-muted-foreground">›</span>
+      </button>
+      {open && (
+        <div className="absolute left-full top-0 z-10 min-w-[200px] pl-0.5">
+          <div className="rounded-md border border-border/60 bg-elevated py-1 shadow-lg">
+            {children}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AppMenuBar({
   projects,
+  recentProjectIds,
   activeProjectId,
   simpleMode,
   projectConfigured,
@@ -136,12 +182,12 @@ export function AppMenuBar({
 
   if (!useInWindowMenuBar()) return null;
 
-  const sortedProjects = [...projects].sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt),
-  );
-
-  const setOpen = (id: string) => (next: boolean) =>
-    setOpenMenu(next ? id : null);
+  const recentProjects = getRecentProjects({
+    version: 1,
+    lastProjectId: activeProjectId,
+    projects,
+    recentProjectIds,
+  });
 
   return (
     <div
@@ -150,8 +196,9 @@ export function AppMenuBar({
     >
       <MenuDropdown
         label="File"
-        open={openMenu === "file"}
-        onOpenChange={setOpen("file")}
+        menuKey="file"
+        openMenu={openMenu}
+        onOpenMenu={setOpenMenu}
       >
         <Item
           label="New Project"
@@ -160,24 +207,36 @@ export function AppMenuBar({
           onClick={() => run("file:new-project")}
         />
         <Separator />
-        {sortedProjects.length === 0 ? (
-          <Item label="No projects" onClick={() => {}} disabled />
-        ) : (
-          sortedProjects.map((p) => (
-            <Item
-              key={p.id}
-              label={p.id === activeProjectId ? `${p.name} ✓` : p.name}
-              disabled={menuLocked}
-              onClick={() => run("file:open-project", { projectId: p.id })}
-            />
-          ))
-        )}
+        <SubMenuItem label="Recent" disabled={menuLocked}>
+          {recentProjects.length === 0 ? (
+            <Item label="No recent projects" onClick={() => {}} disabled />
+          ) : (
+            recentProjects.map((p) => (
+              <Item
+                key={p.id}
+                label={p.id === activeProjectId ? `${p.name} ✓` : p.name}
+                disabled={menuLocked}
+                onClick={() => run("file:open-project", { projectId: p.id })}
+              />
+            ))
+          )}
+        </SubMenuItem>
+        <Item
+          label="Load Project…"
+          disabled={menuLocked}
+          onClick={() => run("file:load-project")}
+        />
         <Separator />
         <Item
           label="Save Project"
           shortcut="Ctrl+S"
-          disabled={menuLocked}
+          disabled={menuLocked || !activeProjectId}
           onClick={() => run("file:save-project")}
+        />
+        <Item
+          label="Save Project As…"
+          disabled={menuLocked || !activeProjectId}
+          onClick={() => run("file:save-project-as")}
         />
         <Separator />
         <Item
@@ -189,8 +248,9 @@ export function AppMenuBar({
 
       <MenuDropdown
         label="View"
-        open={openMenu === "view"}
-        onOpenChange={setOpen("view")}
+        menuKey="view"
+        openMenu={openMenu}
+        onOpenMenu={setOpenMenu}
       >
         <Item
           label={simpleMode ? "Simple Mode ✓" : "Simple Mode"}

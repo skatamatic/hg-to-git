@@ -66,6 +66,15 @@ export function useStreamLogs() {
       const message = String(data.message ?? "");
       if (!message) return;
 
+      const prev = pendingRef.current[pendingRef.current.length - 1];
+      if (
+        prev?.message === message &&
+        (level === "info" || level === "warn") &&
+        /^Warning: sanitized (branch|tag)/i.test(message)
+      ) {
+        return;
+      }
+
       pendingRef.current.push({
         id: nextId(),
         level,

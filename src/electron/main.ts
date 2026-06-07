@@ -27,10 +27,12 @@ import {
 
   apiSaveProject,
 
+  apiImportProjectFromFile,
+
+  apiSaveProjectToFile,
+
   apiValidate,
   apiFixGitIgnoreCase,
-  apiGetHgAuthors,
-  apiImportAuthorsMap,
   apiResetGitTarget,
 
   syncLegacySettingsFromProject,
@@ -141,10 +143,18 @@ function createWindow() {
 
 
 
+function projectFileFilters() {
+  return [
+    { name: "hg-to-git project", extensions: ["hg-to-git-project.json", "json"] },
+    { name: "All files", extensions: ["*"] },
+  ];
+}
+
 async function pickPathNative(options: {
   kind: "directory" | "file";
   title?: string;
   defaultPath?: string;
+  fileFilter?: "project" | "all";
 }) {
   const win = mainWindow;
   if (!win || win.isDestroyed()) {
@@ -162,10 +172,9 @@ async function pickPathNative(options: {
         options.kind === "directory" ? ["openDirectory"] : ["openFile"],
       filters:
         options.kind === "file"
-          ? [
-              { name: "Author maps", extensions: ["map"] },
-              { name: "All files", extensions: ["*"] },
-            ]
+          ? options.fileFilter === "project"
+            ? projectFileFilters()
+            : [{ name: "All files", extensions: ["*"] }]
           : undefined,
     });
 
@@ -181,7 +190,41 @@ async function pickPathNative(options: {
   }
 }
 
+async function pickSavePathNative(options: {
+  title?: string;
+  defaultPath?: string;
+  suggestedName?: string;
+  fileFilter?: "project" | "all";
+}) {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) {
+    return { path: null, cancelled: true };
+  }
 
+  win.focus();
+  win.setEnabled(false);
+
+  try {
+    const result = await dialog.showSaveDialog(win, {
+      title: options.title ?? "Save file",
+      defaultPath: options.defaultPath,
+      filters:
+        options.fileFilter === "project"
+          ? projectFileFilters()
+          : [{ name: "All files", extensions: ["*"] }],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { path: null, cancelled: true };
+    }
+    return { path: result.filePath, cancelled: false };
+  } finally {
+    if (!win.isDestroyed()) {
+      win.setEnabled(true);
+      win.focus();
+    }
+  }
+}
 
 function registerIpc() {
 
@@ -217,7 +260,26 @@ function registerIpc() {
 
   ipcMain.handle("projects:delete", (_e, id: string) => apiDeleteProject(id));
 
+  ipcMain.handle("projects:import-file", async (_e, filePath: string) => {
+    const result = await apiImportProjectFromFile(filePath);
+    await syncLegacySettingsFromProject(result.project);
+    return result;
+  });
 
+  ipcMain.handle(
+    "projects:save-file",
+    async (_e, { id, filePath, partial }: { id: string; filePath: string; partial?: unknown }) => {
+      const result = await apiSaveProjectToFile(
+        id,
+        filePath,
+        partial && typeof partial === "object"
+          ? (partial as import("../server/projects.js").Project)
+          : undefined,
+      );
+      await syncLegacySettingsFromProject(result.project);
+      return result;
+    },
+  );
 
   ipcMain.handle("menu:sync", (_e, state: MenuSyncState) => {
 
@@ -238,25 +300,6 @@ function registerIpc() {
   });
 
 
-
-  ipcMain.handle("authors:scan", (_e, { hgRepo }: { hgRepo: string }) => {
-    try {
-      return apiGetHgAuthors(hgRepo);
-    } catch (e) {
-      return Promise.reject(e);
-    }
-  });
-
-  ipcMain.handle(
-    "authors:import",
-    (_e, { filePath }: { filePath: string }) => {
-      try {
-        return apiImportAuthorsMap(filePath);
-      } catch (e) {
-        return Promise.reject(e);
-      }
-    },
-  );
 
   ipcMain.handle(
     "snapshot:get",
@@ -360,6 +403,8 @@ function registerIpc() {
   });
 
   ipcMain.handle("pick-path", (_e, options) => pickPathNative(options));
+
+  ipcMain.handle("pick-save-path", (_e, options) => pickSavePathNative(options));
 
   ipcMain.handle("deps:check", () => apiCheckToolchain());
 

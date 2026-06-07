@@ -1,12 +1,12 @@
 import { FolderGit2, GitBranch } from "lucide-react";
 import type { Project, RepoSnapshot } from "../types";
-import { AuthorsPanel } from "./AuthorsPanel";
 import {
   SetupBranchDeltaAside,
   SetupBranchDeltaAsideMobile,
 } from "./SetupBranchDeltaAside";
 import { GitTargetBanner } from "./GitTargetBanner";
 import { IgnoreCaseBanner } from "./IgnoreCaseBanner";
+import { UnnamedHeadsBanner } from "./UnnamedHeadsBanner";
 import { useInputsLocked } from "../lib/inputsLocked";
 import { cn } from "../lib/utils";
 import { PathField } from "./PathField";
@@ -102,6 +102,7 @@ export function SetupView({
         onReset={onRefresh}
         onForceRun={onForceConvert}
       />
+      <UnnamedHeadsBanner snapshot={snapshot} />
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
           <Panel title="Repositories" className="shrink-0" scroll={false}>
@@ -177,12 +178,6 @@ export function SetupView({
               </label>
             </div>
           </Panel>
-
-          <AuthorsPanel
-            className="min-h-[140px] flex-1"
-            project={project}
-            onUpdate={onUpdate}
-          />
 
           <SetupBranchDeltaAsideMobile snapshot={snapshot} />
         </div>

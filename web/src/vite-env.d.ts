@@ -1,8 +1,6 @@
 /// <reference types="vite/client" />
 
 import type {
-  AuthorMappingEntry,
-  HgAuthorScanRow,
   Project,
   ProjectsState,
   ToolchainReport,
@@ -24,6 +22,14 @@ interface HgToGitBridge {
     partial: Partial<Project>,
   ) => Promise<{ state: ProjectsState; project: Project }>;
   deleteProject: (id: string) => Promise<ProjectsState>;
+  importProjectFile: (
+    filePath: string,
+  ) => Promise<{ state: ProjectsState; project: Project }>;
+  saveProjectFile: (
+    id: string,
+    filePath: string,
+    partial?: Partial<Project>,
+  ) => Promise<{ state: ProjectsState; project: Project }>;
   syncMenu: (state: unknown) => Promise<void>;
   checkToolchain: () => Promise<ToolchainReport>;
   installToolchain: (
@@ -50,8 +56,6 @@ interface HgToGitBridge {
       offset?: number;
     },
   ) => Promise<unknown>;
-  scanHgAuthors: (hgRepo: string) => Promise<HgAuthorScanRow[]>;
-  importAuthorsMap: (filePath: string) => Promise<AuthorMappingEntry[]>;
   validate: (body: unknown) => Promise<unknown>;
   fixGitIgnoreCase: (gitRepo: string) => Promise<{
     ok: boolean;
@@ -67,6 +71,13 @@ interface HgToGitBridge {
     kind: "directory" | "file";
     title?: string;
     defaultPath?: string;
+    fileFilter?: "project" | "all";
+  }) => Promise<{ path: string | null; cancelled: boolean; error?: string }>;
+  pickSavePath: (options: {
+    title?: string;
+    defaultPath?: string;
+    suggestedName?: string;
+    fileFilter?: "project" | "all";
   }) => Promise<{ path: string | null; cancelled: boolean; error?: string }>;
   convert: (
     body: Record<string, unknown>,

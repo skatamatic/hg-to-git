@@ -5,7 +5,6 @@ import path from "node:path";
 export interface UiSettings {
   hgRepo: string;
   gitRepo: string;
-  authorsMap?: string;
   defaultBranch?: string;
   checkoutWorkingTree?: boolean;
   simpleMode?: boolean;

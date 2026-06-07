@@ -1,5 +1,6 @@
 import { ArrowRight, Loader2 } from "lucide-react";
 import type { AlignedCommitPair, BranchHistoryResult } from "../types";
+import { formatCommitAuthorLine } from "../lib/commitDate";
 import { branchRowGridClass } from "../lib/branchGrid";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -71,9 +72,9 @@ function CommitCell({
       </div>
       <p
         className="text-ui-caption truncate text-muted-foreground"
-        title={commit.author}
+        title={formatCommitAuthorLine(commit.author, commit.date)}
       >
-        {commit.author || "Unknown author"}
+        {formatCommitAuthorLine(commit.author, commit.date)}
       </p>
       {commit.tags && commit.tags.length > 0 ? (
         <CommitTags tags={commit.tags} side={side} />

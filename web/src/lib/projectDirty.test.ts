@@ -26,15 +26,6 @@ describe("projectHasUnsavedChanges", () => {
     expect(projectHasUnsavedChanges(saved, saved)).toBe(false);
   });
 
-  it("compares author mappings by value", () => {
-    const saved = project({
-      authorMappings: [{ hgAuthor: "A", gitName: "A", gitEmail: "a@x" }],
-    });
-    const draft = project({
-      authorMappings: [{ hgAuthor: "A", gitName: "A", gitEmail: "b@x" }],
-    });
-    expect(projectHasUnsavedChanges(draft, saved)).toBe(true);
-  });
 });
 
 describe("projectDraftPartial", () => {

@@ -23,19 +23,13 @@ import { BranchCommitHistory } from "./BranchCommitHistory";
 function formatCommitMeta(
   revision?: number,
   tip?: string,
-  commitCount?: number,
   pending?: boolean,
 ): string | undefined {
-  const parts: string[] = [];
-  if (commitCount != null) {
-    parts.push(`${commitCount} commit${commitCount === 1 ? "" : "s"}`);
-  }
   if (revision != null) {
-    parts.push(`r${revision}${pending ? " · pending" : ""}`);
-  } else if (tip) {
-    parts.push(tip);
+    return `r${revision}${pending ? " · pending" : ""}`;
   }
-  return parts.length ? parts.join(" · ") : undefined;
+  if (tip) return tip;
+  return undefined;
 }
 
 function missingBranchLabel(side: "hg" | "git", compact?: boolean): string {
@@ -188,10 +182,9 @@ export function BranchAlignedRow({
   const hgMeta = formatCommitMeta(
     row.hg?.revision,
     row.hg?.tip,
-    row.hg?.commitCount,
     row.status === "pending",
   );
-  const gitMeta = formatCommitMeta(undefined, row.git?.tip, row.git?.commitCount);
+  const gitMeta = formatCommitMeta(undefined, row.git?.tip);
 
   const header = (
     <div

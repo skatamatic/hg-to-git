@@ -72,8 +72,11 @@ export function GitTargetBanner({
               )}
             </p>
             <p className="text-ui-caption">
-              hg-fast-export needs an empty repo for the first import (git init only, no
-              commits). The test fixture used to seed a <code className="text-ui-mono">master</code> commit; reset or use force.
+              hg-fast-export needs either an empty Git repo (git init only, no commits) for a
+              first import, or an existing repo with{" "}
+              <code className="text-ui-mono">.git/hg2git-*</code> state to resume incremental
+              sync. If this target was partially imported before, restore those files or reset
+              and re-import.
             </p>
             {resetError && <p className="mt-1 text-destructive">{resetError}</p>}
           </div>

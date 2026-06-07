@@ -43,39 +43,58 @@ export function LogPanel({ logs, running, embedded }: Props) {
                 Waiting for hg-fast-export output…
               </p>
             )}
-            {logs.map((entry, i) => (
-              <div
-                key={entry.id}
-                className={cn(
-                  "flex gap-2.5 rounded-md px-2 py-0.5",
-                  entry.level === "error" && "bg-destructive/[0.06]",
-                  entry.level === "warn" && "bg-warning/[0.05]",
-                )}
-              >
-                <span className="w-5 shrink-0 select-none text-right text-muted-foreground/35">
-                  {i + 1}
-                </span>
-                <span
-                  className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", levelDot[entry.level])}
-                />
-                {entry.revisionCurrent != null && entry.revisionMax != null && (
-                  <span className="w-12 shrink-0 tabular-nums text-accent/70">
-                    {entry.revisionCurrent}/{entry.revisionMax}
+            {logs.map((entry, i) => {
+              const hasRev =
+                entry.revisionCurrent != null &&
+                entry.revisionMax != null &&
+                Boolean(entry.message?.trim());
+              return (
+                <div
+                  key={entry.id}
+                  className={cn(
+                    "grid items-start gap-x-2 rounded-md px-2 py-0.5",
+                    hasRev
+                      ? "grid-cols-[1.25rem_0.375rem_4.75rem_minmax(0,1fr)_auto]"
+                      : "grid-cols-[1.25rem_0.375rem_minmax(0,1fr)_auto]",
+                    entry.level === "error" && "bg-destructive/[0.06]",
+                    entry.level === "warn" && "bg-warning/[0.05]",
+                  )}
+                >
+                  <span className="select-none text-right text-muted-foreground/35">
+                    {i + 1}
                   </span>
-                )}
-                <span className={cn("min-w-0 flex-1 break-words", levelStyles[entry.level])}>
-                  {entry.message}
-                </span>
-                {(entry.level === "warn" || entry.level === "error") && (
-                  <Badge
-                    variant={entry.level === "error" ? "destructive" : "warning"}
-                    className="hidden h-5 shrink-0 sm:inline-flex"
+                  <span
+                    className={cn(
+                      "mt-1.5 size-1.5 rounded-full",
+                      levelDot[entry.level],
+                    )}
+                  />
+                  {hasRev ? (
+                    <span className="shrink-0 truncate text-right tabular-nums text-accent/70">
+                      {entry.revisionCurrent}/{entry.revisionMax}
+                    </span>
+                  ) : null}
+                  <span
+                    className={cn(
+                      "min-w-0 break-words",
+                      levelStyles[entry.level],
+                    )}
                   >
-                    {entry.level}
-                  </Badge>
-                )}
-              </div>
-            ))}
+                    {entry.message}
+                  </span>
+                  {(entry.level === "warn" || entry.level === "error") && (
+                    <Badge
+                      variant={
+                        entry.level === "error" ? "destructive" : "warning"
+                      }
+                      className="hidden h-5 shrink-0 sm:inline-flex"
+                    >
+                      {entry.level}
+                    </Badge>
+                  )}
+                </div>
+              );
+            })}
             <div ref={endRef} />
     </div>
   );

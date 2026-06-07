@@ -7,9 +7,11 @@ import { app, dialog } from "electron";
 import { writeFileSync } from "node:fs";
 
 interface PickRequest {
-  kind: "directory" | "file";
+  kind: "directory" | "file" | "save-file";
   title?: string;
   defaultPath?: string;
+  suggestedName?: string;
+  fileFilter?: "project" | "all";
 }
 
 function readRequest(): PickRequest {
@@ -30,6 +32,27 @@ app.disableHardwareAcceleration();
 app.whenReady().then(async () => {
   try {
     const req = readRequest();
+    if (req.kind === "save-file") {
+      const result = await dialog.showSaveDialog({
+        title: req.title ?? "Save file",
+        defaultPath: req.defaultPath,
+        filters:
+          req.fileFilter === "project"
+            ? [
+                { name: "hg-to-git project", extensions: ["hg-to-git-project.json", "json"] },
+                { name: "All files", extensions: ["*"] },
+              ]
+            : [
+                { name: "All files", extensions: ["*"] },
+              ],
+      });
+      writeResult({
+        path: result.canceled ? null : (result.filePath ?? null),
+        cancelled: result.canceled,
+      });
+      return;
+    }
+
     const result = await dialog.showOpenDialog({
       title: req.title ?? (req.kind === "directory" ? "Select folder" : "Select file"),
       defaultPath: req.defaultPath,
@@ -37,10 +60,12 @@ app.whenReady().then(async () => {
         req.kind === "directory" ? ["openDirectory"] : ["openFile"],
       filters:
         req.kind === "file"
-          ? [
-              { name: "Author maps", extensions: ["map"] },
-              { name: "All files", extensions: ["*"] },
-            ]
+          ? req.fileFilter === "project"
+            ? [
+                { name: "hg-to-git project", extensions: ["hg-to-git-project.json", "json"] },
+                { name: "All files", extensions: ["*"] },
+              ]
+            : [{ name: "All files", extensions: ["*"] }]
           : undefined,
     });
 

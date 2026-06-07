@@ -27,8 +27,8 @@ describe("buildAlignedBranchRows", () => {
       hg: {
         valid: true,
         branches: [
-          { name: "default", revision: 5, commitCount: 6 },
-          { name: "feature-alpha", revision: 3, commitCount: 2 },
+          { name: "default", revision: 5 },
+          { name: "feature-alpha", revision: 3 },
         ],
       },
       git: {
@@ -50,7 +50,6 @@ describe("buildAlignedBranchRows", () => {
     const synced = rows.find((r) => r.status === "synced");
     expect(synced?.hg?.name).toBe("default");
     expect(synced?.git?.name).toBe("master");
-    expect(synced?.git?.commitCount).toBeUndefined();
   });
 
   it("sorts issues before synced branches", () => {

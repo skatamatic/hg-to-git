@@ -22,32 +22,17 @@ export interface ToolchainReport {
   tools: ToolCheck[];
 }
 
-export interface AuthorMappingEntry {
-  hgAuthor: string;
-  gitName?: string;
-  gitEmail?: string;
-  gitIdentity?: string;
-}
-
-export interface HgAuthorScanRow {
-  hgAuthor: string;
-  commitCount: number;
-  suggestedName?: string;
-  suggestedEmail?: string;
-}
-
 export interface Project {
   id: string;
   name: string;
   hgRepo: string;
   gitRepo: string;
-  authorsMap?: string;
-  authorMappings?: AuthorMappingEntry[];
   defaultBranch?: string;
   checkoutWorkingTree?: boolean;
   simpleMode?: boolean;
   lastRunAt?: string;
   lastRunStatus?: "success" | "error" | "idle";
+  projectFile?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -56,12 +41,12 @@ export interface ProjectsState {
   version: 1;
   lastProjectId: string | null;
   projects: Project[];
+  recentProjectIds?: string[];
 }
 
 export interface UiSettings {
   hgRepo: string;
   gitRepo: string;
-  authorsMap?: string;
   defaultBranch?: string;
   checkoutWorkingTree?: boolean;
   lastRunAt?: string;
@@ -72,7 +57,6 @@ export interface BranchInfo {
   name: string;
   tip?: string;
   revision?: number;
-  commitCount?: number;
 }
 
 export interface BranchCommit {
@@ -81,6 +65,8 @@ export interface BranchCommit {
   sha: string;
   author: string;
   message: string;
+  /** ISO-style author/commit date from hg or git. */
+  date?: string;
   tags?: string[];
 }
 
@@ -92,8 +78,6 @@ export interface AlignedCommitPair {
 export interface BranchHistoryResult {
   hgBranch?: string;
   gitBranch?: string;
-  hgTotal: number;
-  gitTotal: number;
   pairs: AlignedCommitPair[];
   limit: number;
   offset: number;
@@ -156,6 +140,7 @@ export interface RepoSnapshot {
     tipRevision?: number;
     tipNode?: string;
     branches: BranchInfo[];
+    unnamedHeadRevisions?: number[];
   };
   git: {
     valid: boolean;
